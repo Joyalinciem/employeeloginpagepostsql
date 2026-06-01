@@ -51,6 +51,30 @@ function App() {
   const [mfaSetupMessage, setMfaSetupMessage] = useState("");
   const [toastMessage, setToastMessage] = useState("");
   const [assignmentLogs, setAssignmentLogs] = useState<any[]>([]);
+  const [logsPage, setLogsPage] = useState(1);
+  const [logsTotal, setLogsTotal] = useState(0);
+  const [logsLimit] = useState(10);
+
+  // Simple modal state for confirmations
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalMessage, setModalMessage] = useState("");
+  const [modalOnConfirm, setModalOnConfirm] = useState<(() => void) | null>(null);
+  const [modalOnCancel, setModalOnCancel] = useState<(() => void) | null>(null);
+
+  const confirmDialog = (message: string) => {
+    return new Promise<boolean>((resolve) => {
+      setModalMessage(message);
+      setModalVisible(true);
+      setModalOnConfirm(() => () => {
+        setModalVisible(false);
+        resolve(true);
+      });
+      setModalOnCancel(() => () => {
+        setModalVisible(false);
+        resolve(false);
+      });
+    });
+  };
   useEffect(() => {
     if (!toastMessage) return;
     const id = setTimeout(() => setToastMessage(''), 4000);
@@ -312,13 +336,40 @@ const handleVerifyMfa = async () => {
 
   const fetchAssignmentLogs = async () => {
     try {
-      const response = await fetch(`${API_URL}/admin/assignment-logs`, {
+      const response = await fetch(`${API_URL}/admin/assignment-logs?page=${page}&limit=${logsLimit}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await response.json();
-      if (response.ok) setAssignmentLogs(data.logs || []);
+      if (response.ok) {
+        setAssignmentLogs(data.logs || []);
+        setLogsPage(data.page || page);
+        setLogsTotal(data.total || 0);
+      }
     } catch (err) {
       console.error('Failed to fetch assignment logs', err);
+    }
+  };
+
+  const exportAssignmentLogs = async () => {
+    try {
+      const res = await fetch(`${API_URL}/admin/assignment-logs/export`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) {
+        const d = await res.json();
+        setToastMessage(d.message || 'Failed to export logs');
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'assignment-logs.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      setToastMessage('Failed to export logs');
     }
   };
 
@@ -449,7 +500,8 @@ const handleVerifyMfa = async () => {
   };
 
   const approvePendingRequest = async (userId: string) => {
-    if (!window.confirm('Approve this user request?')) return;
+    const ok = await confirmDialog('Approve this user request?');
+    if (!ok) return;
     const response = await fetch(`${API_URL}/admin/pending-requests/${userId}/approve`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
@@ -466,7 +518,8 @@ const handleVerifyMfa = async () => {
   };
 
   const rejectPendingRequest = async (userId: string) => {
-    if (!window.confirm('Reject this user request?')) return;
+    const ok = await confirmDialog('Reject this user request?');
+    if (!ok) return;
     const response = await fetch(`${API_URL}/admin/pending-requests/${userId}/reject`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
@@ -861,7 +914,8 @@ const handleResetPassword =
   };
 
   const handleDisableMfa = async () => {
-    if (!window.confirm("Are you sure you want to disable Multi-Factor Authentication?")) return;
+    const ok = await confirmDialog("Are you sure you want to disable Multi-Factor Authentication?");
+    if (!ok) return;
 
     const response = await fetch(`${API_URL}/mfa/disable`, {
       method: "POST",
@@ -912,6 +966,17 @@ const handleResetPassword =
             <div style={{ position: 'absolute', top: 12, right: 12, background: 'rgba(0,0,0,0.8)', color: '#fff', padding: '8px 12px', borderRadius: 8 }}>
               {toastMessage}
               <button onClick={() => setToastMessage('')} style={{ marginLeft: 8, background: 'transparent', border: 'none', color: '#fff', cursor: 'pointer' }}>✕</button>
+            </div>
+          )}
+          {modalVisible && (
+            <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+              <div style={{ background: '#0b1220', padding: 20, borderRadius: 8, width: 420, boxShadow: '0 6px 20px rgba(0,0,0,0.6)', color: '#fff' }}>
+                <div style={{ marginBottom: 12 }}>{modalMessage}</div>
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                  <button onClick={() => { if (modalOnCancel) modalOnCancel(); else setModalVisible(false); }} style={{ padding: '8px 12px', borderRadius: 6, background: 'transparent', border: '1px solid rgba(255,255,255,0.08)', color: '#fff' }}>Cancel</button>
+                  <button onClick={() => { if (modalOnConfirm) modalOnConfirm(); else setModalVisible(false); }} style={{ padding: '8px 12px', borderRadius: 6, background: 'linear-gradient(to right,#00c6ff,#0072ff)', border: 'none', color: '#000', fontWeight: 'bold' }}>Confirm</button>
+                </div>
+              </div>
             </div>
           )}
           {mfaRequired ? (
@@ -1484,6 +1549,17 @@ const handleResetPassword =
 
   return (
     <div style={styles.dashboard}>
+      {modalVisible && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+          <div style={{ background: '#0b1220', padding: 20, borderRadius: 8, width: 420, boxShadow: '0 6px 20px rgba(0,0,0,0.6)', color: '#fff' }}>
+            <div style={{ marginBottom: 12 }}>{modalMessage}</div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => { if (modalOnCancel) modalOnCancel(); else setModalVisible(false); }} style={{ padding: '8px 12px', borderRadius: 6, background: 'transparent', border: '1px solid rgba(255,255,255,0.08)', color: '#fff' }}>Cancel</button>
+              <button onClick={() => { if (modalOnConfirm) modalOnConfirm(); else setModalVisible(false); }} style={{ padding: '8px 12px', borderRadius: 6, background: 'linear-gradient(to right,#00c6ff,#0072ff)', border: 'none', color: '#000', fontWeight: 'bold' }}>Confirm</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div style={styles.header}>
         <div>
           <h1 style={styles.dashboardTitle}>
@@ -1640,11 +1716,10 @@ const handleResetPassword =
                                 style={{ width: '100%', padding: '8px', marginTop: 6, borderRadius: 6 }}
                                 value={user.managerId || ''}
                                 onChange={(e) => {
-                                  const v = e.target.value || null;
-                                  const manager = adminUsers.find(u => u._id === v);
-                                  const confirmMsg = v ? `Assign ${manager?.name || manager?.email || 'this manager'} to ${user.name}?` : `Unassign manager from ${user.name}?`;
-                                  if (!window.confirm(confirmMsg)) return;
-                                  assignManagerToUser(user._id, v);
+                                    const v = e.target.value || null;
+                                    const manager = adminUsers.find(u => u._id === v);
+                                    const confirmMsg = v ? `Assign ${manager?.name || manager?.email || 'this manager'} to ${user.name}?` : `Unassign manager from ${user.name}?`;
+                                    confirmDialog(confirmMsg).then(ok => { if (ok) assignManagerToUser(user._id, v); });
                                 }}
                               >
                                 <option value="">-- Unassigned --</option>
@@ -1666,8 +1741,7 @@ const handleResetPassword =
                               const v = e.target.value || null;
                               const cto = adminUsers.find(u => u._id === v);
                               const confirmMsg = v ? `Assign ${cto?.name || cto?.email || 'this CTO'} to ${user.name}?` : `Unassign CTO from ${user.name}?`;
-                              if (!window.confirm(confirmMsg)) return;
-                              assignCtoToManager(user._id, v);
+                              confirmDialog(confirmMsg).then(ok => { if (ok) assignCtoToManager(user._id, v); });
                             }}
                           >
                             <option value="">-- Unassigned --</option>
@@ -1687,7 +1761,15 @@ const handleResetPassword =
                   {assignmentLogs.length === 0 ? (
                     <div style={{ color: '#999' }}>No recent assignment activity.</div>
                   ) : (
-                    <div style={{ maxHeight: 220, overflow: 'auto', background: '#0f1720', padding: 10, borderRadius: 8 }}>
+                        <div>
+                          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                            <button onClick={() => fetchAssignmentLogs(logsPage - 1)} disabled={logsPage <= 1} style={{ padding: '6px 10px', borderRadius: 6 }}>Prev</button>
+                            <button onClick={() => fetchAssignmentLogs(logsPage + 1)} disabled={logsPage * logsLimit >= logsTotal} style={{ padding: '6px 10px', borderRadius: 6 }}>Next</button>
+                            <div style={{ color: '#aaa', alignSelf: 'center' }}>Page {logsPage} / {Math.max(1, Math.ceil(logsTotal / logsLimit))}</div>
+                            <div style={{ flex: 1 }} />
+                            <button onClick={exportAssignmentLogs} style={{ padding: '6px 10px', borderRadius: 6 }}>Export CSV</button>
+                          </div>
+                          <div style={{ maxHeight: 220, overflow: 'auto', background: '#0f1720', padding: 10, borderRadius: 8 }}>
                       {assignmentLogs.map((log:any) => (
                         <div key={log._id} style={{ padding: 8, borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
                           <div style={{ fontSize: 13 }}>[{new Date(log.createdAt).toLocaleString()}] <strong>{log.action}</strong></div>
