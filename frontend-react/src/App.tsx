@@ -1,0 +1,2371 @@
+import { useEffect, useState } from "react";
+
+function App() {
+ const API_URL = `http://${window.location.hostname}:5000/api`;
+
+  // =========================
+  // AUTH STATES
+  // =========================
+
+  const [isLogin, setIsLogin] = useState(true);
+
+  const [showForgotPassword, setShowForgotPassword] =
+    useState(false);
+
+  const [showOtpBlock, setShowOtpBlock] =
+    useState(false);
+
+  const [otpVerified, setOtpVerified] =
+    useState(false);
+
+  const [token, setToken] = useState(
+    localStorage.getItem("token") || ""
+  );
+
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [isManager, setIsManager] = useState(false);
+  const [isCto, setIsCto] = useState(false);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [adminTab, setAdminTab] = useState<"users" | "tasks" | "pending">("users");
+  const [adminUsers, setAdminUsers] = useState<any[]>([]);
+  const [adminTasks, setAdminTasks] = useState<any[]>([]);
+  const [pendingRequests, setPendingRequests] = useState<any[]>([]);
+
+  // =========================
+  // MFA LOGIN STATES
+  // =========================
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaMethod, setMfaMethod] = useState<"email" | "totp" | "">("");
+  const [mfaEmail, setMfaEmail] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
+  const [mfaError, setMfaError] = useState("");
+
+  // =========================
+  // MFA SETUP STATES
+  // =========================
+  const [mfaSetupMethod, setMfaSetupMethod] = useState<"email" | "totp" | "">("");
+  const [mfaSetupCode, setMfaSetupCode] = useState("");
+  const [mfaSetupSecret, setMfaSetupSecret] = useState("");
+  const [mfaSetupQrCodeUrl, setMfaSetupQrCodeUrl] = useState("");
+  const [mfaSetupMessage, setMfaSetupMessage] = useState("");
+  const [toastMessage, setToastMessage] = useState("");
+  const [assignmentLogs, setAssignmentLogs] = useState<any[]>([]);
+  useEffect(() => {
+    if (!toastMessage) return;
+    const id = setTimeout(() => setToastMessage(''), 4000);
+    return () => clearTimeout(id);
+  }, [toastMessage]);
+  const [mfaSetupStep, setMfaSetupStep] = useState<"none" | "setup" | "verify">("none");
+
+  // =========================
+  // EDIT TASK STATE
+  // =========================
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+
+  // =========================
+  // LOGIN / REGISTER
+  // =========================
+
+  const [loginData, setLoginData] = useState({
+    email: "",
+    password: "",
+  });
+
+  const [registerData, setRegisterData] =
+    useState({
+      name: "",
+      email: "",
+      password: "",
+      role: "user",
+    });
+  const [registerMessage, setRegisterMessage] =
+    useState("");
+  const [registerError, setRegisterError] =
+    useState("");
+  const [loginMessage, setLoginMessage] =
+    useState("");
+  // =========================
+  // FORGOT PASSWORD
+  // =========================
+
+  const [forgotEmail, setForgotEmail] =
+    useState("");
+
+  const [otp, setOtp] = useState("");
+
+  const [newPassword, setNewPassword] =
+    useState("");
+
+    const [otpMessage, setOtpMessage] =
+  useState("");
+  // VERIFY OTP MESSAGE
+
+const [verifyMessage, setVerifyMessage] =
+  useState("");
+
+// RESET PASSWORD MESSAGE
+
+const [resetMessage, setResetMessage] =
+  useState("");
+  // =========================
+  // TASK STATES
+  // =========================
+
+  const [tasks, setTasks] = useState<any[]>(
+    []
+  );
+
+  const [taskData, setTaskData] = useState({
+    title: "",
+    description: "",
+    dueDate: "",
+    priority: "Medium",
+    status: "Pending",
+    thumbnail: "",
+  });
+
+  // =========================
+  // LOGIN
+  // =========================
+
+ const handleLogin = async () => {
+  setLoginMessage("");
+  setMfaError("");
+  const response = await fetch(
+    `${API_URL}/login`,
+    {
+      method: "POST",
+
+      headers: {
+        "Content-Type":
+          "application/json",
+      },
+
+      body: JSON.stringify(loginData),
+    }
+  );
+
+  const data = await response.json();
+
+  if (data.requiresMFA) {
+    setMfaRequired(true);
+    setMfaMethod(data.mfaMethod);
+    setMfaEmail(data.email);
+    setLoginMessage("Verification required");
+  } else if (data.token) {
+    localStorage.setItem(
+      "token",
+      data.token
+    );
+
+    setToken(data.token);
+
+    fetchProfile(data.token);
+
+    fetchTasks(data.token);
+
+    setLoginMessage(
+      "Login Successful"
+    );
+  } else {
+    setLoginMessage(
+      data.message || "Invalid Credentials"
+    );
+  }
+};
+
+const handleVerifyMfa = async () => {
+  setMfaError("");
+  const response = await fetch(
+    `${API_URL}/verify-mfa`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        email: mfaEmail,
+        code: mfaCode,
+      }),
+    }
+  );
+
+  const data = await response.json();
+
+  if (data.token) {
+    localStorage.setItem(
+      "token",
+      data.token
+    );
+
+    setToken(data.token);
+
+    fetchProfile(data.token);
+
+    fetchTasks(data.token);
+
+    setMfaRequired(false);
+    setMfaMethod("");
+    setMfaCode("");
+    setLoginMessage("Login Successful");
+  } else {
+    setMfaError(data.message || "Verification code is incorrect or expired");
+  }
+};
+
+  // =========================
+  // REGISTER
+  // =========================
+
+  const handleRegister = async () => {
+    setRegisterMessage("");
+    setRegisterError("");
+
+    const response = await fetch(
+      `${API_URL}/register`,
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type":
+            "application/json",
+        },
+
+        body: JSON.stringify(
+          registerData
+        ),
+      }
+    );
+
+    const data = await response.json();
+
+    if (response.ok) {
+      setRegisterMessage(
+        data.message ||
+          "Registration successful. Waiting for admin approval."
+      );
+      setRegisterData({
+        name: "",
+        email: "",
+        password: "",
+        role: "user",
+      });
+      setIsLogin(true);
+    } else {
+      setRegisterError(
+        data.message || "Registration failed"
+      );
+    }
+  };
+
+  const assignManagerToUser = async (userId: string, managerId: string | null) => {
+    try {
+      const response = await fetch(`${API_URL}/admin/users/${userId}/assign-manager`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ managerId: managerId || null }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        setToastMessage(data.message || 'Failed to assign manager');
+      } else {
+        setToastMessage(data.message || 'Manager assignment updated');
+      }
+      fetchUsers();
+      fetchAssignmentLogs();
+    } catch (err) {
+      console.error(err);
+      setToastMessage('Failed to assign manager');
+    }
+  };
+
+  const assignCtoToManager = async (managerId: string, ctoId: string | null) => {
+    try {
+      const response = await fetch(`${API_URL}/admin/users/${managerId}/assign-cto`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ ctoId: ctoId || null }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        setToastMessage(data.message || 'Failed to assign CTO');
+      } else {
+        setToastMessage(data.message || 'CTO assignment updated');
+      }
+
+      fetchUsers();
+      fetchAssignmentLogs();
+    } catch (err) {
+      console.error(err);
+      setToastMessage('Failed to assign CTO');
+    }
+  };
+
+  const fetchAssignmentLogs = async () => {
+    try {
+      const response = await fetch(`${API_URL}/admin/assignment-logs`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (response.ok) setAssignmentLogs(data.logs || []);
+    } catch (err) {
+      console.error('Failed to fetch assignment logs', err);
+    }
+  };
+
+  // =========================
+  // SEND OTP
+  // =========================
+
+ const handleSendOtp = async () => {
+  const response = await fetch(
+    `${API_URL}/forgot-password`,
+    {
+      method: "POST",
+
+      headers: {
+        "Content-Type":
+          "application/json",
+      },
+
+      body: JSON.stringify({
+        email: forgotEmail,
+      }),
+    }
+  );
+
+  const data = await response.json();
+
+  if (
+    data.message.includes(
+      "OTP sent successfully"
+    )
+  ) {
+    setOtpMessage(
+      "OTP sent to your email. OTP valid for 15 minutes."
+    );
+
+    setShowOtpBlock(true);
+  } else {
+    setOtpMessage(data.message);
+  }
+};
+
+  const fetchProfile = async (authToken = token) => {
+    if (!authToken) return;
+
+    const response = await fetch(
+      `${API_URL}/profile`,
+      {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      }
+    );
+
+    if (response.ok) {
+      const data = await response.json();
+      setCurrentUser(data);
+      setIsAdmin(data.role === "admin");
+      setIsManager(data.role === "manager");
+      setIsCto(data.role === "cto");
+      return data;
+    }
+
+    if (response.status === 401) {
+      localStorage.removeItem("token");
+      setToken("");
+      setCurrentUser(null);
+      setIsAdmin(false);
+      setShowAdminPanel(false);
+      setLoginMessage("Session expired. Please log in again.");
+    }
+
+    return null;
+  };
+
+  const fetchUsers = async (authToken = token) => {
+    if (!authToken) return;
+
+    const endpoint = isAdmin
+      ? `${API_URL}/admin/users`
+      : `${API_URL}/users`;
+
+    const response = await fetch(endpoint, {
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+      },
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      setAdminUsers(data);
+    }
+  };
+
+  const fetchAdminTasks = async (authToken = token) => {
+    if (!authToken) return;
+
+    const response = await fetch(
+      `${API_URL}/admin/tasks`,
+      {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      }
+    );
+
+    if (response.ok) {
+      const data = await response.json();
+      setAdminTasks(data);
+    }
+  };
+
+  const fetchPendingRequests = async (authToken = token) => {
+    if (!authToken) return;
+
+    const response = await fetch(
+      `${API_URL}/admin/pending-requests`,
+      {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      }
+    );
+
+    if (response.ok) {
+      const data = await response.json();
+      setPendingRequests(data);
+    }
+  };
+
+  const approvePendingRequest = async (userId: string) => {
+    if (!window.confirm('Approve this user request?')) return;
+    const response = await fetch(`${API_URL}/admin/pending-requests/${userId}/approve`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    const data = await response.json();
+    if (response.ok) {
+      setPendingRequests((prev) => prev.filter((user) => user._id !== userId));
+      setToastMessage(data.message || 'User approved and notified by email.');
+      fetchUsers();
+    } else {
+      setToastMessage(data.message || 'Failed to approve user');
+    }
+  };
+
+  const rejectPendingRequest = async (userId: string) => {
+    if (!window.confirm('Reject this user request?')) return;
+    const response = await fetch(`${API_URL}/admin/pending-requests/${userId}/reject`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await response.json();
+    if (response.ok) {
+      setPendingRequests((prev) => prev.filter((user) => user._id !== userId));
+      setToastMessage(data.message || 'User request rejected and notification sent.');
+    } else {
+      setToastMessage(data.message || 'Failed to reject user');
+    }
+  };
+
+  // =========================
+  // VERIFY OTP
+  // =========================
+const handleVerifyOtp = async () => {
+  const response = await fetch(
+    `${API_URL}/verify-otp`,
+    {
+      method: "POST",
+
+      headers: {
+        "Content-Type":
+          "application/json",
+      },
+
+      body: JSON.stringify({
+        email: forgotEmail,
+        otp,
+      }),
+    }
+  );
+
+  const data = await response.json();
+
+  if (
+    data.message ===
+    "OTP verified successfully"
+  ) {
+    setVerifyMessage(
+      "OTP verified successfully."
+    );
+
+    setOtpVerified(true);
+  } else {
+    setVerifyMessage(data.message);
+
+    if (
+      data.message.includes(
+        "OTP expired"
+      )
+    ) {
+      setShowOtpBlock(false);
+
+      setOtpVerified(false);
+
+      setOtp("");
+
+      setOtpMessage(
+        "OTP expired. Please click Send OTP again."
+      );
+    }
+  }
+};
+
+  // =========================
+  // RESET PASSWORD
+  // =========================
+const handleResetPassword =
+  async () => {
+    const response = await fetch(
+      `${API_URL}/reset-password`,
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type":
+            "application/json",
+        },
+
+        body: JSON.stringify({
+          email: forgotEmail,
+          newPassword,
+        }),
+      }
+    );
+
+    const data =
+      await response.json();
+
+    if (
+      data.message ===
+      "Password reset successful"
+    ) {
+      setResetMessage(
+        "Password changed successfully."
+      );
+
+      setTimeout(() => {
+        setShowForgotPassword(
+          false
+        );
+
+        setShowOtpBlock(false);
+
+        setOtpVerified(false);
+
+        setForgotEmail("");
+
+        setOtp("");
+
+        setNewPassword("");
+
+        setOtpMessage("");
+
+        setVerifyMessage("");
+
+        setResetMessage("");
+      }, 3000);
+    } else {
+      setResetMessage(data.message);
+    }
+  };
+
+  // =========================
+  // FETCH TASKS
+  // =========================
+
+  const fetchTasks = async (
+    authToken = token
+  ) => {
+    try {
+      const response = await fetch(
+        `${API_URL}/tasks`,
+        {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        if (Array.isArray(data)) {
+          setTasks(data);
+        } else {
+          setTasks([]);
+        }
+      } else {
+        setTasks([]);
+      }
+    } catch (err) {
+      console.error("Error fetching tasks:", err);
+      setTasks([]);
+    }
+  };
+
+  useEffect(() => {
+    if (token) {
+      fetchProfile();
+      fetchTasks();
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (showAdminPanel) {
+      if (adminTab === "users") {
+        fetchUsers();
+      } else if (adminTab === "tasks") {
+        fetchAdminTasks();
+      } else {
+        fetchPendingRequests();
+      }
+    }
+  }, [isAdmin, isManager, isCto, showAdminPanel, adminTab]);
+
+  // =========================
+  // ADD / UPDATE TASK
+  // =========================
+
+  const handleAddTask = async () => {
+    const method = editingTaskId ? "PUT" : "POST";
+    const url = editingTaskId ? `${API_URL}/tasks/${editingTaskId}` : `${API_URL}/tasks`;
+
+    const response = await fetch(
+      url,
+      {
+        method,
+
+        headers: {
+          "Content-Type":
+            "application/json",
+
+          Authorization: `Bearer ${token}`,
+        },
+
+        body: JSON.stringify(taskData),
+      }
+    );
+
+    const data = await response.json();
+    if (!response.ok) {
+      alert(data.message || "Failed to save task");
+      return;
+    }
+
+    setEditingTaskId(null);
+    fetchTasks();
+
+    setTaskData({
+      title: "",
+      description: "",
+      dueDate: "",
+      priority: "Medium",
+      status: "Pending",
+      thumbnail: "",
+    });
+  };
+
+  const loadTaskForEdit = (task: any) => {
+    setEditingTaskId(task._id);
+    setTaskData({
+      title: task.title || "",
+      description: task.description || "",
+      dueDate: task.dueDate || "",
+      priority: task.priority || "Medium",
+      status: task.status || "Pending",
+      thumbnail: task.thumbnail || "",
+    });
+    // Scroll to task form
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleCancelEdit = () => {
+    setEditingTaskId(null);
+    setTaskData({
+      title: "",
+      description: "",
+      dueDate: "",
+      priority: "Medium",
+      status: "Pending",
+      thumbnail: "",
+    });
+  };
+
+  // =========================
+  // FILE UPLOAD
+  // =========================
+
+  const handleFileUpload = (
+    e: any
+  ) => {
+    const file = e.target.files[0];
+
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setTaskData({
+          ...taskData,
+          thumbnail: reader.result as string,
+        });
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // =========================
+  // DELETE TASK
+  // =========================
+
+  const deleteTask = async (
+    id: string
+  ) => {
+    const response = await fetch(`${API_URL}/tasks/${id}`, {
+      method: "DELETE",
+
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      const data = await response.json();
+      alert(data.message || "Failed to delete task");
+    }
+
+    fetchTasks();
+  };
+
+  // =========================
+  // TOGGLE PERMISSIONS (ADMIN)
+  // =========================
+
+  const toggleUserPermission = async (
+    userId: string,
+    permissionType:
+      | "updateTask"
+      | "deleteTask"
+      | "updateUser"
+      | "deleteUser",
+    currentValue: boolean
+  ) => {
+    const body: any = {};
+
+    switch (permissionType) {
+      case "updateTask":
+        body.canUpdateTasks = !currentValue;
+        break;
+      case "deleteTask":
+        body.canDeleteTasks = !currentValue;
+        break;
+      case "updateUser":
+        body.canUpdateUsers = !currentValue;
+        break;
+      case "deleteUser":
+        body.canDeleteUsers = !currentValue;
+        break;
+    }
+
+    const response = await fetch(
+      `${API_URL}/admin/users/${userId}/permissions`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      }
+    );
+
+    if (response.ok) {
+      fetchUsers();
+    } else {
+      const data = await response.json();
+      alert(data.message || "Failed to update permissions");
+    }
+  };
+
+  // =========================
+  // MFA SETUP & MANAGEMENT
+  // =========================
+
+  const handleMfaSetup = async (method: "email" | "totp") => {
+    setMfaSetupMessage("");
+    const response = await fetch(`${API_URL}/mfa/setup`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ method }),
+    });
+
+    const data = await response.json();
+    if (response.ok) {
+      setMfaSetupMethod(method);
+      if (method === "totp") {
+        setMfaSetupQrCodeUrl(data.qrCodeUrl);
+        setMfaSetupSecret(data.secret);
+      }
+      setMfaSetupStep("verify");
+      setMfaSetupMessage(data.message || "MFA setup initialized. Please verify.");
+    } else {
+      setMfaSetupMessage(data.message || "Failed to initialize MFA setup");
+    }
+  };
+
+  const handleVerifyMfaSetup = async () => {
+    setMfaSetupMessage("");
+    const response = await fetch(`${API_URL}/mfa/verify-setup`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        method: mfaSetupMethod,
+        code: mfaSetupCode,
+      }),
+    });
+
+    const data = await response.json();
+    if (response.ok && data.message.includes("enabled successfully")) {
+      alert(data.message);
+      fetchProfile();
+      resetMfaSetup();
+    } else {
+      setMfaSetupMessage(data.message || "Verification failed");
+    }
+  };
+
+  const handleDisableMfa = async () => {
+    if (!window.confirm("Are you sure you want to disable Multi-Factor Authentication?")) return;
+
+    const response = await fetch(`${API_URL}/mfa/disable`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const data = await response.json();
+    if (response.ok) {
+      alert("MFA disabled successfully");
+      fetchProfile();
+    } else {
+      alert(data.message || "Failed to disable MFA");
+    }
+  };
+
+  const resetMfaSetup = () => {
+    setMfaSetupMethod("");
+    setMfaSetupCode("");
+    setMfaSetupSecret("");
+    setMfaSetupQrCodeUrl("");
+    setMfaSetupMessage("");
+    setMfaSetupStep("none");
+  };
+
+  // =========================
+  // LOGOUT
+  // =========================
+
+  const logout = () => {
+    localStorage.removeItem("token");
+
+    setToken("");
+
+    window.location.reload();
+  };
+
+  // =========================
+  // LOGIN / REGISTER PAGE
+  // =========================
+
+  if (!token) {
+    return (
+      <div style={styles.authContainer}>
+        <div style={styles.authCard}>
+          {toastMessage && (
+            <div style={{ position: 'absolute', top: 12, right: 12, background: 'rgba(0,0,0,0.8)', color: '#fff', padding: '8px 12px', borderRadius: 8 }}>
+              {toastMessage}
+              <button onClick={() => setToastMessage('')} style={{ marginLeft: 8, background: 'transparent', border: 'none', color: '#fff', cursor: 'pointer' }}>✕</button>
+            </div>
+          )}
+          {mfaRequired ? (
+            <div>
+              <h1 style={styles.heading}>MFA Verification</h1>
+              <p style={{ textAlign: "center", marginBottom: "20px", color: "#ccc" }}>
+                {mfaMethod === "email"
+                  ? `We've sent a 6-digit verification code to ${mfaEmail}.`
+                  : "Please enter the 6-digit verification code from your Authenticator app (e.g., Google, Microsoft, Authy, Duo)."}
+              </p>
+
+              <input
+                type="text"
+                placeholder="6-digit code"
+                value={mfaCode}
+                onChange={(e) => setMfaCode(e.target.value)}
+                style={styles.input}
+              />
+
+              <button
+                style={{
+                  ...styles.button,
+                  background: "linear-gradient(to right, #00c6ff, #0072ff)",
+                }}
+                onClick={handleVerifyMfa}
+              >
+                Verify & Login
+              </button>
+
+              {mfaError && (
+                <div
+                  style={{
+                    marginTop: "15px",
+                    padding: "12px",
+                    borderRadius: "10px",
+                    textAlign: "center",
+                    fontWeight: "bold",
+                    background: "rgba(255,0,0,0.15)",
+                    color: "#ff6b6b",
+                  }}
+                >
+                  {mfaError}
+                </div>
+              )}
+
+              <button
+                style={{
+                  marginTop: "20px",
+                  background: "none",
+                  border: "none",
+                  color: "#00c6ff",
+                  cursor: "pointer",
+                  width: "100%",
+                  textAlign: "center"
+                }}
+                onClick={() => {
+                  setMfaRequired(false);
+                  setMfaMethod("");
+                  setMfaCode("");
+                  setMfaError("");
+                  setLoginMessage("");
+                }}
+              >
+                ← Back to Login
+              </button>
+            </div>
+          ) : (
+            <>
+              <h1 style={styles.heading}>
+                {isLogin
+                  ? "Employee Login"
+                  : "Employee Register"}
+              </h1>
+
+              {!showForgotPassword && (
+                <>
+              {!isLogin && (
+                <>
+                  <input
+                    type="text"
+                    placeholder="Name"
+                    value={registerData.name}
+                    onChange={(e) =>
+                      setRegisterData({
+                        ...registerData,
+                        name:
+                          e.target.value,
+                      })
+                    }
+                    style={styles.input}
+                  />
+                  <select
+                    value={registerData.role}
+                    onChange={(e) =>
+                      setRegisterData({
+                        ...registerData,
+                        role: e.target.value,
+                      })
+                    }
+                    style={styles.input}
+                  >
+                    <option value="user">User</option>
+                    <option value="manager">Manager</option>
+                    <option value="cto">CTO</option>
+                  </select>
+                </>
+              )}
+
+              <input
+                type="email"
+                placeholder="Email"
+                value={
+                  isLogin
+                    ? loginData.email
+                    : registerData.email
+                }
+                onChange={(e) =>
+                  isLogin
+                    ? setLoginData({
+                        ...loginData,
+                        email:
+                          e.target
+                            .value,
+                      })
+                    : setRegisterData({
+                        ...registerData,
+                        email:
+                          e.target
+                            .value,
+                      })
+                }
+                style={styles.input}
+              />
+
+              <input
+                type="password"
+                placeholder="Password"
+                value={
+                  isLogin
+                    ? loginData.password
+                    : registerData.password
+                }
+                onChange={(e) =>
+                  isLogin
+                    ? setLoginData({
+                        ...loginData,
+                        password:
+                          e.target
+                            .value,
+                      })
+                    : setRegisterData({
+                        ...registerData,
+                        password:
+                          e.target
+                            .value,
+                      })
+                }
+                style={styles.input}
+              />
+
+              <button
+                style={styles.button}
+                onClick={
+                  isLogin
+                    ? handleLogin
+                    : handleRegister
+                }
+              >
+                {isLogin
+                  ? "Login"
+                  : "Register"}
+              </button>
+
+              {registerMessage && !isLogin && (
+                <div
+                  style={{
+                    marginTop: "15px",
+                    padding: "12px",
+                    borderRadius: "10px",
+                    textAlign: "center",
+                    fontWeight: "bold",
+                    background: "rgba(56,239,125,0.15)",
+                    color: "#38ef7d",
+                  }}
+                >
+                  {registerMessage}
+                </div>
+              )}
+              {registerError && !isLogin && (
+                <div
+                  style={{
+                    marginTop: "15px",
+                    padding: "12px",
+                    borderRadius: "10px",
+                    textAlign: "center",
+                    fontWeight: "bold",
+                    background: "rgba(255,0,0,0.15)",
+                    color: "#ff6b6b",
+                  }}
+                >
+                  {registerError}
+                </div>
+              )}
+
+{/* LOGIN MESSAGE */}
+
+{loginMessage && (
+  <div
+    style={{
+      marginTop: "15px",
+      padding: "12px",
+      borderRadius: "10px",
+      textAlign: "center",
+      fontWeight: "bold",
+      background:
+        loginMessage ===
+        "Login Successful"
+          ? "rgba(56,239,125,0.15)"
+          : "rgba(255,0,0,0.15)",
+      color:
+        loginMessage ===
+        "Login Successful"
+          ? "#38ef7d"
+          : "#ff6b6b",
+    }}
+  >
+    {loginMessage}
+  </div>
+)}
+
+              {/* FORGOT PASSWORD */}
+
+              {isLogin && (
+                <div
+                  style={{
+                    marginTop: "15px",
+                    textAlign: "center",
+                  }}
+                >
+                  <span
+                    style={{
+                      color: "#ccc",
+                    }}
+                  >
+                    Forgot your
+                    password?
+                  </span>
+
+                  <br />
+
+                  <button
+                    style={{
+                      marginTop: "8px",
+                      background:
+                        "linear-gradient(to right,#ff512f,#dd2476)",
+                      color:
+                        "white",
+                      border:
+                        "none",
+                      padding:
+                        "10px 20px",
+                      borderRadius:
+                        "20px",
+                      cursor:
+                        "pointer",
+                      fontWeight:
+                        "bold",
+                    }}
+                    onClick={() =>
+                      setShowForgotPassword(
+                        true
+                      )
+                    }
+                  >
+                    Reset Password
+                  </button>
+                </div>
+              )}
+
+              <button
+                style={
+                  styles.switchButton
+                }
+                onClick={() =>
+                  setIsLogin(
+                    !isLogin
+                  )
+                }
+              >
+                {isLogin
+                  ? "New user? Register"
+                  : "Already have account? Login"}
+              </button>
+            </>
+          )}
+
+          {/* FORGOT PASSWORD PAGE */}
+
+          {showForgotPassword && (
+            <div
+              style={{
+                marginTop: "20px",
+                padding: "25px",
+                borderRadius:
+                  "15px",
+                background:
+                  "rgba(255,255,255,0.1)",
+                backdropFilter:
+                  "blur(10px)",
+              }}
+            >
+              <h2
+                style={{
+                  textAlign:
+                    "center",
+                  marginBottom:
+                    "20px",
+                }}
+              >
+                Password Recovery
+              </h2>
+
+              <input
+                type="email"
+                placeholder="Enter Registered Email"
+                value={forgotEmail}
+                onChange={(e) =>
+                  setForgotEmail(
+                    e.target
+                      .value
+                  )
+                }
+                style={
+                  styles.input
+                }
+              />
+
+              <button
+                style={{
+                  ...styles.button,
+                  background:
+                    "linear-gradient(to right,#36d1dc,#5b86e5)",
+                }}
+                onClick={
+                  handleSendOtp
+                }
+              >
+                Send OTP
+                {verifyMessage && (
+  <div
+    style={{
+      marginTop: "12px",
+      background:
+        "rgba(17,153,142,0.15)",
+      padding: "10px",
+      borderRadius: "10px",
+      color: "#38ef7d",
+      textAlign: "center",
+      fontWeight: "bold",
+    }}
+  >
+    {verifyMessage}
+  </div>
+)}
+              </button>
+
+              {/* OTP SECTION */}
+
+              {showOtpBlock && (
+                <div
+                  style={{
+                    marginTop:
+                      "20px",
+                    padding:
+                      "20px",
+                    borderRadius:
+                      "12px",
+                    background:
+                      "rgba(255,255,255,0.08)",
+                  }}
+                >
+                  <h3>
+                    Verify OTP
+                  </h3>
+
+                  <input
+                    type="text"
+                    placeholder="Enter OTP"
+                    value={otp}
+                    onChange={(e) =>
+                      setOtp(e.target.value)
+                    }
+                    style={styles.input}
+                  />
+
+                  <button
+                    style={{
+                      ...styles.button,
+                      background:
+                        "linear-gradient(to right,#ff9966,#ff5e62)",
+                    }}
+                    onClick={handleVerifyOtp}
+                  >
+                    Verify OTP
+                  </button>
+
+                  <button
+                    style={{
+                      ...styles.button,
+                      background:
+                        "linear-gradient(to right,#ff9966,#ff5e62)",
+                    }}
+                    onClick={handleResetPassword}
+                  >
+                    Change Password
+                  </button>
+
+{/* RESET MESSAGE */}
+
+{resetMessage && (
+  <div
+    style={{
+      marginTop: "12px",
+      background:
+        "rgba(255,153,102,0.15)",
+      padding: "10px",
+      borderRadius: "10px",
+      color: "#ffcc70",
+      textAlign: "center",
+      fontWeight: "bold",
+    }}
+  >
+    {resetMessage}
+  </div>
+)}
+
+{/* OTP MESSAGE */}
+
+{otpMessage && (
+  <div
+    style={{
+      marginTop: "15px",
+      background:
+        "rgba(56,239,125,0.15)",
+      padding: "12px",
+      borderRadius: "10px",
+      textAlign: "center",
+      color: "#38ef7d",
+      fontWeight: "bold",
+    }}
+  >
+    {otpMessage}
+  </div>
+)}
+
+                </div>
+              )}
+
+              {/* CHANGE PASSWORD */}
+
+              {otpVerified && (
+                <div
+                  style={{
+                    marginTop:
+                      "20px",
+                    padding:
+                      "20px",
+                    borderRadius:
+                      "12px",
+                    background:
+                      "rgba(255,255,255,0.08)",
+                  }}
+                >
+                  <h3>
+                    Create New
+                    Password
+                  </h3>
+
+                  <input
+                    type="password"
+                    placeholder="New Password"
+                    value={
+                      newPassword
+                    }
+                    onChange={(
+                      e
+                    ) =>
+                      setNewPassword(
+                        e.target
+                          .value
+                      )
+                    }
+                    style={
+                      styles.input
+                    }
+                  />
+
+                  <button
+                    style={{
+                      ...styles.button,
+                      background:
+                        "linear-gradient(to right,#ff9966,#ff5e62)",
+                    }}
+                    onClick={
+                      handleResetPassword
+                    }
+                  >
+                    Change
+                    Password
+                    {resetMessage && (
+  <div
+    style={{
+      marginTop: "12px",
+      background:
+        "rgba(255,153,102,0.15)",
+      padding: "10px",
+      borderRadius: "10px",
+      color: "#ffcc70",
+      textAlign: "center",
+      fontWeight: "bold",
+    }}
+  >
+    {resetMessage}
+  </div>
+)}
+                  </button>
+                </div>
+              )}
+
+              <button
+                style={{
+                  marginTop:
+                    "20px",
+                  background:
+                    "none",
+                  border: "none",
+                  color:
+                    "#00c6ff",
+                  cursor:
+                    "pointer",
+                }}
+                onClick={() => {
+                  setShowForgotPassword(
+                    false
+                  );
+
+                  setShowOtpBlock(
+                    false
+                  );
+
+                  setOtpVerified(
+                    false
+                  );
+                }}
+              >
+                ← Back to Login
+              </button>
+            </div>
+          )}
+          </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // =========================
+  // DASHBOARD
+  // =========================
+
+  return (
+    <div style={styles.dashboard}>
+      <div style={styles.header}>
+        <div>
+          <h1 style={styles.dashboardTitle}>
+            {showAdminPanel
+              ? "Admin Panel"
+              : "Employee Dashboard"}
+          </h1>
+
+          {currentUser && (
+            <p
+              style={{
+                color: "#ccc",
+                marginTop: "8px",
+              }}
+            >
+              Welcome, {currentUser.name}{" "}
+              {isAdmin && "(Administrator)"}
+            </p>
+          )}
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            gap: "12px",
+            alignItems: "center",
+          }}
+        >
+          {(isAdmin || isManager || isCto) && (
+            <button
+              style={{
+                ...styles.button,
+                width: "auto",
+                minWidth: "180px",
+                marginTop: 0,
+              }}
+              onClick={() =>
+                setShowAdminPanel(
+                  (prev) => !prev
+                )
+              }
+            >
+              {showAdminPanel
+                ? "Back to My Tasks"
+                : isAdmin
+                ? "Open Admin Panel"
+                : isCto
+                ? "Open CTO Panel"
+                : "Open Manager Panel"}
+            </button>
+          )}
+          <button
+            style={styles.logoutButton}
+            onClick={logout}
+          >
+            Logout
+          </button>
+        </div>
+      </div>
+
+      {showAdminPanel ? (
+        <div style={styles.adminPanel}>
+          <div style={styles.adminTabs}>
+            <button
+              style={
+                adminTab === "users"
+                  ? styles.activeTab
+                  : styles.adminTab
+              }
+              onClick={() =>
+                setAdminTab("users")
+              }
+            >
+              Users
+            </button>
+            {isAdmin && (
+              <button
+                style={
+                  adminTab === "pending"
+                    ? styles.activeTab
+                    : styles.adminTab
+                }
+                onClick={() =>
+                  setAdminTab("pending")
+                }
+              >
+                Pending Requests ({pendingRequests.length})
+              </button>
+            )}
+            {isAdmin && (
+              <button
+                style={
+                  adminTab === "tasks"
+                    ? styles.activeTab
+                    : styles.adminTab
+                }
+                onClick={() =>
+                  setAdminTab("tasks")
+                }
+              >
+                All Tasks
+              </button>
+            )}
+          </div>
+
+          {adminTab === "users" ? (
+            <div style={styles.adminSection}>
+              <h2>Registered Users</h2>
+
+              <div style={styles.adminGrid}>
+                {adminUsers.length === 0 ? (
+                  <div>No users found.</div>
+                ) : (
+                  adminUsers.map((user) => (
+                    <div
+                      key={user._id || user.email}
+                      style={styles.adminCard}
+                    >
+                      <p>
+                        <strong>Name:</strong> {user.name}
+                      </p>
+                      <p>
+                        <strong>Email:</strong> {user.email}
+                      </p>
+                      <p>
+                        <strong>Role:</strong> {user.role}
+                      </p>
+                      {user.role === "user" && (
+                        <div style={{ marginTop: "12px", borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: "8px" }}>
+                          <p style={{ fontSize: "14px", fontWeight: "bold", marginBottom: "6px", color: "#00c6ff" }}>User Permissions</p>
+                          <label style={{ display: "flex", alignItems: "center", gap: "8px", margin: "6px 0", cursor: "pointer", fontSize: "13px" }}>
+                            <input
+                              type="checkbox"
+                              checked={!!user.canUpdateTasks}
+                              onChange={() => toggleUserPermission(user._id, "updateTask", !!user.canUpdateTasks)}
+                              style={{ cursor: "pointer" }}
+                            />
+                            Can Update Tasks
+                          </label>
+                          <label style={{ display: "flex", alignItems: "center", gap: "8px", margin: "6px 0", cursor: "pointer", fontSize: "13px" }}>
+                            <input
+                              type="checkbox"
+                              checked={!!user.canDeleteTasks}
+                              onChange={() => toggleUserPermission(user._id, "deleteTask", !!user.canDeleteTasks)}
+                              style={{ cursor: "pointer" }}
+                            />
+                            Can Delete Tasks
+                          </label>
+
+                          {isAdmin && (
+                            <div style={{ marginTop: 10 }}>
+                              <label style={{ fontSize: 13, fontWeight: 'bold', color: '#ccc' }}>Assign Manager</label>
+                              <select
+                                style={{ width: '100%', padding: '8px', marginTop: 6, borderRadius: 6 }}
+                                value={user.managerId || ''}
+                                onChange={(e) => {
+                                  const v = e.target.value || null;
+                                  const manager = adminUsers.find(u => u._id === v);
+                                  const confirmMsg = v ? `Assign ${manager?.name || manager?.email || 'this manager'} to ${user.name}?` : `Unassign manager from ${user.name}?`;
+                                  if (!window.confirm(confirmMsg)) return;
+                                  assignManagerToUser(user._id, v);
+                                }}
+                              >
+                                <option value="">-- Unassigned --</option>
+                                {adminUsers.filter(u => u.role === 'manager').map(m => (
+                                  <option key={m._id} value={m._id}>{m.name} ({m.email})</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {user.role === "manager" && isAdmin && (
+                        <div style={{ marginTop: "12px", borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: "8px" }}>
+                          <label style={{ fontSize: 13, fontWeight: 'bold', color: '#ccc' }}>Assign CTO</label>
+                          <select
+                            style={{ width: '100%', padding: '8px', marginTop: 6, borderRadius: 6 }}
+                            value={user.ctoId || ''}
+                            onChange={(e) => {
+                              const v = e.target.value || null;
+                              const cto = adminUsers.find(u => u._id === v);
+                              const confirmMsg = v ? `Assign ${cto?.name || cto?.email || 'this CTO'} to ${user.name}?` : `Unassign CTO from ${user.name}?`;
+                              if (!window.confirm(confirmMsg)) return;
+                              assignCtoToManager(user._id, v);
+                            }}
+                          >
+                            <option value="">-- Unassigned --</option>
+                            {adminUsers.filter(u => u.role === 'cto').map(c => (
+                              <option key={c._id} value={c._id}>{c.name} ({c.email})</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+              {isAdmin && (
+                <div style={{ marginTop: 20 }}>
+                  <h3 style={{ marginBottom: 8 }}>Recent Assignment Logs</h3>
+                  {assignmentLogs.length === 0 ? (
+                    <div style={{ color: '#999' }}>No recent assignment activity.</div>
+                  ) : (
+                    <div style={{ maxHeight: 220, overflow: 'auto', background: '#0f1720', padding: 10, borderRadius: 8 }}>
+                      {assignmentLogs.map((log:any) => (
+                        <div key={log._id} style={{ padding: 8, borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
+                          <div style={{ fontSize: 13 }}>[{new Date(log.createdAt).toLocaleString()}] <strong>{log.action}</strong></div>
+                          <div style={{ fontSize: 13, color: '#ccc' }}>By: {log.actorId?.name || log.actorId?.email} → Target: {log.targetId?.name || log.targetId?.email}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : adminTab === "pending" ? (
+            <div style={styles.adminSection}>
+              <h2>Pending Requests</h2>
+
+              <div style={styles.adminGrid}>
+                {pendingRequests.length === 0 ? (
+                  <div>No pending requests found.</div>
+                ) : (
+                  pendingRequests.map((request) => (
+                    <div
+                      key={request._id || request.email}
+                      style={styles.adminCard}
+                    >
+                      <p>
+                        <strong>Name:</strong> {request.name}
+                      </p>
+                      <p>
+                        <strong>Email:</strong> {request.email}
+                      </p>
+                      <p>
+                        <strong>Role:</strong> {request.role}
+                      </p>
+                      <p>
+                        <strong>Requested At:</strong> {new Date(request.createdAt).toLocaleString()}
+                      </p>
+                      <div style={{ display: "flex", gap: "10px", marginTop: "15px" }}>
+                        <button
+                          style={{
+                            flex: 1,
+                            padding: "10px",
+                            background: "linear-gradient(to right, #00c6ff, #0072ff)",
+                            color: "white",
+                            border: "none",
+                            borderRadius: "10px",
+                            cursor: "pointer",
+                            fontWeight: "bold",
+                          }}
+                          onClick={() => approvePendingRequest(request._id)}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          style={{
+                            flex: 1,
+                            padding: "10px",
+                            background: "#ff6b6b",
+                            color: "white",
+                            border: "none",
+                            borderRadius: "10px",
+                            cursor: "pointer",
+                            fontWeight: "bold",
+                          }}
+                          onClick={() => rejectPendingRequest(request._id)}
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          ) : (
+            <div style={styles.adminSection}>
+              <h2>All Tasks</h2>
+
+              <div style={styles.taskGrid}>
+                {adminTasks.length === 0 ? (
+                  <div>No tasks available.</div>
+                ) : (
+                  adminTasks.map((task) => (
+                    <div
+                      key={task._id}
+                      style={styles.taskCard}
+                    >
+                      {task.thumbnail && (
+                        <img
+                          src={task.thumbnail}
+                          alt="thumbnail"
+                          style={styles.thumbnail}
+                        />
+                      )}
+
+                      <h3>{task.title}</h3>
+
+                      <p>
+                        <strong>User:</strong>{" "}
+                        {task.userId?.name ||
+                          task.userId?.email ||
+                          "Unknown"}
+                      </p>
+
+                      <p>
+                        <strong>
+                          Description:
+                        </strong>{" "}
+                        {task.description}
+                      </p>
+
+                      <p>
+                        <strong>
+                          Due Date:
+                        </strong>{" "}
+                        {task.dueDate}
+                      </p>
+
+                      <p>
+                        <strong>
+                          Priority:
+                        </strong>{" "}
+                        {task.priority}
+                      </p>
+
+                      <p>
+                        <strong>
+                          Status:
+                        </strong>{" "}
+                        {task.status}
+                      </p>
+
+                      <div style={{ display: "flex", gap: "10px", marginTop: "15px" }}>
+                        <button
+                          style={{
+                            flex: 1,
+                            padding: "10px",
+                            background: "linear-gradient(to right, #00c6ff, #0072ff)",
+                            color: "white",
+                            border: "none",
+                            borderRadius: "10px",
+                            cursor: "pointer",
+                            fontWeight: "bold"
+                          }}
+                          onClick={() => loadTaskForEdit(task)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          style={{
+                            flex: 1,
+                            padding: "10px",
+                            background: "red",
+                            color: "white",
+                            border: "none",
+                            borderRadius: "10px",
+                            cursor: "pointer",
+                            fontWeight: "bold"
+                          }}
+                          onClick={() => deleteTask(task._id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
+          {/* MULTI-FACTOR AUTHENTICATION SETUP & MANAGEMENT */}
+          <div style={styles.taskForm}>
+            <h2>Multi-Factor Authentication (MFA)</h2>
+            {currentUser && currentUser.mfaEnabled ? (
+              <div style={{ marginTop: "15px" }}>
+                <p style={{ color: "#38ef7d", fontSize: "16px", fontWeight: "bold" }}>
+                  ✓ MFA is ENABLED via {currentUser.mfaMethod === "email" ? "Email OTP" : "Authenticator App (TOTP)"}.
+                </p>
+                <p style={{ color: "#ccc", marginTop: "8px", fontSize: "14px" }}>
+                  Your account is protected. You will be prompted to enter a verification code the next time you log in.
+                </p>
+                <button
+                  style={{ ...styles.logoutButton, marginTop: "15px", width: "auto" }}
+                  onClick={handleDisableMfa}
+                >
+                  Disable MFA
+                </button>
+              </div>
+            ) : (
+              <div style={{ marginTop: "15px" }}>
+                {mfaSetupStep === "none" ? (
+                  <div>
+                    <p style={{ color: "#ccc", marginBottom: "15px" }}>
+                      Enhance your account security by enabling Multi-Factor Authentication.
+                    </p>
+                    <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
+                      <button
+                        style={{ ...styles.button, width: "auto", margin: 0, padding: "10px 20px" }}
+                        onClick={() => handleMfaSetup("email")}
+                      >
+                        Set up Email MFA
+                      </button>
+                      <button
+                        style={{ ...styles.button, width: "auto", margin: 0, padding: "10px 20px", background: "linear-gradient(to right, #ff9966, #ff5e62)" }}
+                        onClick={() => handleMfaSetup("totp")}
+                      >
+                        Set up Authenticator App
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ background: "rgba(255,255,255,0.05)", padding: "20px", borderRadius: "12px", marginTop: "10px" }}>
+                    <h3 style={{ marginBottom: "10px" }}>Verify MFA Setup ({mfaSetupMethod === "email" ? "Email" : "Authenticator App"})</h3>
+                    
+                    {mfaSetupMethod === "email" ? (
+                      <p style={{ color: "#ccc", margin: "10px 0" }}>
+                        We've sent a 6-digit verification code to your email. Enter it below to enable Email MFA.
+                      </p>
+                    ) : (
+                      <div style={{ margin: "15px 0" }}>
+                        <p style={{ color: "#ccc", marginBottom: "15px" }}>
+                          Scan this QR code with your Authenticator app (e.g., Google Authenticator, Microsoft Authenticator, Authy, Duo) or enter the secret key manually.
+                        </p>
+                        {mfaSetupQrCodeUrl && (
+                          <img
+                            src={mfaSetupQrCodeUrl}
+                            alt="MFA QR Code"
+                            style={{
+                              width: "200px",
+                              height: "200px",
+                              margin: "15px auto",
+                              display: "block",
+                              border: "4px solid white",
+                              borderRadius: "8px"
+                            }}
+                          />
+                        )}
+                        <p style={{ fontFamily: "monospace", fontSize: "14px", background: "rgba(0,0,0,0.3)", padding: "10px", borderRadius: "6px", wordBreak: "break-all", textAlign: "center" }}>
+                          Secret Key: {mfaSetupSecret}
+                        </p>
+                      </div>
+                    )}
+
+                    <input
+                      type="text"
+                      placeholder="6-digit verification code"
+                      value={mfaSetupCode}
+                      onChange={(e) => setMfaSetupCode(e.target.value)}
+                      style={styles.input}
+                    />
+
+                    <div style={{ display: "flex", gap: "10px", marginTop: "15px" }}>
+                      <button
+                        style={{ ...styles.button, margin: 0, background: "linear-gradient(to right, #00c6ff, #0072ff)" }}
+                        onClick={handleVerifyMfaSetup}
+                      >
+                        Verify & Enable
+                      </button>
+                      <button
+                        style={{ ...styles.button, margin: 0, background: "#ff6b6b", width: "auto" }}
+                        onClick={resetMfaSetup}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+
+                    {mfaSetupMessage && (
+                      <div style={{ marginTop: "12px", color: mfaSetupMessage.includes("successfully") ? "#38ef7d" : "#ff5e62", fontWeight: "bold" }}>
+                        {mfaSetupMessage}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* TASK CREATION & EDITING FORM */}
+          {currentUser && (currentUser.role === "admin" || currentUser.canUpdateTasks !== false) ? (
+            <div style={styles.taskForm}>
+              <h2>{editingTaskId ? "Edit Task" : "Add New Task"}</h2>
+
+              <input
+                type="text"
+                placeholder="Task Title"
+                value={taskData.title}
+                onChange={(e) =>
+                  setTaskData({
+                    ...taskData,
+                    title: e.target.value,
+                  })
+                }
+                style={styles.input}
+              />
+
+              <textarea
+                placeholder="Task Description"
+                value={taskData.description}
+                onChange={(e) =>
+                  setTaskData({
+                    ...taskData,
+                    description: e.target.value,
+                  })
+                }
+                style={styles.textarea}
+              />
+
+              <input
+                type="date"
+                value={taskData.dueDate}
+                onChange={(e) =>
+                  setTaskData({
+                    ...taskData,
+                    dueDate: e.target.value,
+                  })
+                }
+                style={styles.input}
+              />
+
+              <select
+                value={taskData.priority}
+                onChange={(e) =>
+                  setTaskData({
+                    ...taskData,
+                    priority: e.target.value,
+                  })
+                }
+                style={styles.input}
+              >
+                <option></option>
+                <option>High</option>
+                <option>Medium</option>
+                <option>Low</option>
+              </select>
+
+              <select
+                value={taskData.status}
+                onChange={(e) =>
+                  setTaskData({
+                    ...taskData,
+                    status: e.target.value,
+                  })
+                }
+                style={styles.input}
+              >
+                <option> </option>
+                <option>Pending</option>
+                <option>Completed</option>
+              </select>
+
+              <input
+                type="file"
+                onChange={handleFileUpload}
+                style={styles.input}
+              />
+
+              <button
+                style={styles.button}
+                onClick={handleAddTask}
+              >
+                {editingTaskId ? "Update Task" : "Add Task"}
+              </button>
+
+              {editingTaskId && (
+                <button
+                  style={{ ...styles.button, background: "#ff6b6b", marginTop: "10px" }}
+                  onClick={handleCancelEdit}
+                >
+                  Cancel Edit
+                </button>
+              )}
+            </div>
+          ) : (
+            <div style={styles.taskForm}>
+              <h2>Task Management</h2>
+              <div
+                style={{
+                  marginTop: "15px",
+                  padding: "15px",
+                  borderRadius: "10px",
+                  background: "rgba(255, 94, 98, 0.15)",
+                  border: "1px solid #ff5e62",
+                  color: "#ff8b8e",
+                  fontWeight: "bold",
+                }}
+              >
+                ⚠ Task creation and modification have been disabled for your account by the administrator.
+              </div>
+            </div>
+          )}
+
+          <h2 style={styles.recentTitle}>
+            Your Recent Tasks
+          </h2>
+
+          <div style={styles.taskGrid}>
+            {tasks.map((task) => (
+              <div
+                key={task._id}
+                style={styles.taskCard}
+              >
+                {task.thumbnail && (
+                  <img
+                    src={task.thumbnail}
+                    alt="thumbnail"
+                    style={styles.thumbnail}
+                  />
+                )}
+
+                <h3>{task.title}</h3>
+
+                <p>
+                  <strong>
+                    Description:
+                  </strong>{" "}
+                  {task.description}
+                </p>
+
+                <p>
+                  <strong>
+                    Due Date:
+                  </strong>{" "}
+                  {task.dueDate}
+                </p>
+
+                <p>
+                  <strong>
+                    Priority:
+                  </strong>{" "}
+                  {task.priority}
+                </p>
+
+                <p>
+                  <strong>
+                    Status:
+                  </strong>{" "}
+                  {task.status}
+                </p>
+
+                <div style={{ display: "flex", gap: "10px", marginTop: "15px" }}>
+                  {(currentUser && (currentUser.role === "admin" || currentUser.canUpdateTasks !== false)) && (
+                    <button
+                      style={{
+                        flex: 1,
+                        padding: "10px",
+                        background: "linear-gradient(to right, #00c6ff, #0072ff)",
+                        color: "white",
+                        border: "none",
+                        borderRadius: "10px",
+                        cursor: "pointer",
+                        fontWeight: "bold"
+                      }}
+                      onClick={() => loadTaskForEdit(task)}
+                    >
+                      Edit
+                    </button>
+                  )}
+                  {(currentUser && (currentUser.role === "admin" || currentUser.canDeleteTasks !== false)) && (
+                    <button
+                      style={{
+                        flex: 1,
+                        padding: "10px",
+                        background: "red",
+                        color: "white",
+                        border: "none",
+                        borderRadius: "10px",
+                        cursor: "pointer",
+                        fontWeight: "bold"
+                      }}
+                      onClick={() => deleteTask(task._id)}
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+const styles: any = {
+  authContainer: {
+    display: "flex",
+    justifyContent:
+      "center",
+    alignItems: "center",
+    minHeight: "100vh",
+    background:
+      "linear-gradient(to right,#141e30,#243b55)",
+  },
+
+  authCard: {
+    background:
+      "rgba(255,255,255,0.08)",
+    backdropFilter:
+      "blur(12px)",
+    padding: "40px",
+    borderRadius: "20px",
+    width: "400px",
+    color: "white",
+  },
+
+  heading: {
+    textAlign: "center",
+    marginBottom: "20px",
+  },
+
+  dashboard: {
+    minHeight: "100vh",
+    padding: "30px",
+    background:
+      "linear-gradient(to right,#141e30,#243b55)",
+    color: "white",
+  },
+
+  header: {
+    display: "flex",
+    justifyContent:
+      "space-between",
+    alignItems: "center",
+  },
+
+  dashboardTitle: {
+    fontSize: "35px",
+  },
+
+  logoutButton: {
+    background: "red",
+    color: "white",
+    border: "none",
+    padding: "10px 20px",
+    borderRadius: "10px",
+    cursor: "pointer",
+  },
+
+  adminPanel: {
+    marginTop: "30px",
+  },
+
+  adminTabs: {
+    display: "flex",
+    gap: "12px",
+    marginBottom: "20px",
+    flexWrap: "wrap",
+  },
+
+  adminTab: {
+    padding: "12px 20px",
+    background: "rgba(255,255,255,0.08)",
+    border: "none",
+    color: "white",
+    borderRadius: "12px",
+    cursor: "pointer",
+  },
+
+  activeTab: {
+    padding: "12px 20px",
+    background: "#00c6ff",
+    border: "none",
+    color: "#141e30",
+    borderRadius: "12px",
+    cursor: "pointer",
+  },
+
+  adminSection: {
+    background: "rgba(255,255,255,0.08)",
+    backdropFilter: "blur(12px)",
+    padding: "25px",
+    borderRadius: "20px",
+  },
+
+  adminGrid: {
+    display: "grid",
+    gridTemplateColumns:
+      "repeat(auto-fit,minmax(220px,1fr))",
+    gap: "16px",
+  },
+
+  adminCard: {
+    background: "rgba(255,255,255,0.05)",
+    padding: "18px",
+    borderRadius: "16px",
+    minHeight: "120px",
+  },
+
+  taskForm: {
+    background:
+      "rgba(255,255,255,0.08)",
+    backdropFilter:
+      "blur(12px)",
+    padding: "25px",
+    borderRadius: "20px",
+    marginTop: "20px",
+  },
+
+  input: {
+    width: "100%",
+    padding: "12px",
+    marginTop: "12px",
+    borderRadius: "10px",
+    border: "none",
+  },
+
+  textarea: {
+    width: "100%",
+    padding: "12px",
+    marginTop: "12px",
+    borderRadius: "10px",
+    minHeight: "100px",
+    border: "none",
+  },
+
+  button: {
+    width: "100%",
+    padding: "14px",
+    marginTop: "15px",
+    background:
+      "linear-gradient(to right,#00c6ff,#0072ff)",
+    color: "white",
+    border: "none",
+    borderRadius: "10px",
+    cursor: "pointer",
+    fontSize: "16px",
+  },
+
+  switchButton: {
+    marginTop: "15px",
+    background: "none",
+    border: "none",
+    color: "#00c6ff",
+    cursor: "pointer",
+  },
+
+  recentTitle: {
+    marginTop: "40px",
+    marginBottom: "20px",
+  },
+
+  taskGrid: {
+    display: "grid",
+    gridTemplateColumns:
+      "repeat(auto-fit,minmax(300px,1fr))",
+    gap: "20px",
+  },
+
+  taskCard: {
+    background:
+      "rgba(255,255,255,0.08)",
+    backdropFilter:
+      "blur(10px)",
+    padding: "20px",
+    borderRadius: "20px",
+  },
+
+  thumbnail: {
+    width: "100%",
+    height: "180px",
+    objectFit: "cover",
+    borderRadius: "12px",
+    marginBottom: "10px",
+  },
+
+  deleteButton: {
+    width: "100%",
+    padding: "10px",
+    marginTop: "15px",
+    background: "red",
+    color: "white",
+    border: "none",
+    borderRadius: "10px",
+    cursor: "pointer",
+  },
+};
+
+export default App;
