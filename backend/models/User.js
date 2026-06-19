@@ -1,21 +1,30 @@
 const mongoose = require("mongoose");
 
 const userSchema = new mongoose.Schema({
-  name: String,
-
+  name: {
+    type: String,
+    trim: true,
+  },
   email: {
     type: String,
     unique: true,
+    required: true,
+    trim: true,
+    lowercase: true,
   },
-
-  password: String,
-
+  password: {
+    type: String,
+    required: true,
+  },
   role: {
     type: String,
     enum: ["user", "admin", "manager", "cto"],
     default: "user",
   },
-
+  designation: {
+    type: String,
+    default: "",
+  },
   approved: {
     type: Boolean,
     default: false,
@@ -34,16 +43,16 @@ const userSchema = new mongoose.Schema({
   // 'email' | 'totp' (Google Authenticator)
   mfaMethod: {
     type: String,
-    enum: ["email", "totp"],
+    enum: ["email", "totp", null],
     default: null,
   },
-
-  // TOTP secret when using Google Authenticator
   mfaSecret: String,
-
-  // Temporary secret used during TOTP setup until user verifies the first code
   mfaTempSecret: String,
-
+  oldPassword: String,
+  profilePicture: {
+    type: String,
+    default: "",
+  },
   canUpdateTasks: {
     type: Boolean,
     default: false,
@@ -63,6 +72,18 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  managerId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    default: null,
+  },
+  ctoId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    default: null,
+  },
+}, {
+  timestamps: true,
 });
 
 module.exports = mongoose.model("User", userSchema);

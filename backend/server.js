@@ -1,7 +1,13 @@
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
-const { Pool } = require("pg");
+const mongoose = require("mongoose");
+const connectDB = require("./config/db");
+const User = require("./models/User");
+const Task = require("./models/Task");
+const Role = require("./models/Role");
+const Notification = require("./models/Notification");
+const Audit = require("./models/Audit");
 const { randomUUID } = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -165,6 +171,7 @@ console.log('🔧 Frontend path resolved to:', frontendPath);
 app.use(express.json());
 app.use(logMiddleware);
 app.use("/api", rateLimitMiddleware);
+// MongoDB connection will be initialized after seedRoles() is defined.
 // Serve static employee-facing frontend files
 app.use(express.static(frontendPath));
 app.get('/', (req, res) => {
@@ -657,24 +664,28 @@ const connectWithRetry = async () => {
   }
 };
 
-connectWithRetry();
+// connectWithRetry(); // Disabled for MongoDB mode
 
 process.on('SIGINT', async () => {
-  await pool.end();
-  console.log('PostgreSQL connection closed (SIGINT)');
+  try {
+    await mongoose.disconnect();
+    console.log('MongoDB connection closed (SIGINT)');
+  } catch (err) {
+    console.warn('Error closing MongoDB connection:', err?.message || err);
+  }
   process.exit(0);
 });
 process.on('SIGTERM', async () => {
-  await pool.end();
-  console.log('PostgreSQL connection closed (SIGTERM)');
+  try {
+    await mongoose.disconnect();
+    console.log('MongoDB connection closed (SIGTERM)');
+  } catch (err) {
+    console.warn('Error closing MongoDB connection:', err?.message || err);
+  }
   process.exit(0);
 });
 
-const User = createModel('users');
-const Task = createModel('tasks');
-const Audit = createModel('audits');
-const Notification = createModel('notifications');
-const Role = createModel('roles');
+// MongoDB models are used instead of PostgreSQL query helpers
 
 const seedRoles = async () => {
   const defaultRoles = [
@@ -691,6 +702,13 @@ const seedRoles = async () => {
     } }, { upsert: true });
   }
 };
+
+connectDB()
+  .then(() => seedRoles())
+  .catch((err) => {
+    console.error('MongoDB initialization failed:', err?.message || err);
+    process.exit(1);
+  });
 
 // =====================================
 // Helper: create an in-app notification
