@@ -3,8 +3,8 @@ services:
     name: employee-login-postgresql
     runtime: node
     rootDir: .
-    buildCommand: cd backend && npm install
-    startCommand: node backend/server.js
+    buildCommand: npm install
+    startCommand: npm start
     plan: free
     envVars:
       - key: DB_MODE
@@ -14,16 +14,16 @@ services:
       - key: NODE_ENV
         value: production
       - key: DATABASE_URL
-        sync: false   # Set this manually in Render dashboard
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: SMTP_HOST
-        sync: false   # Set in Render dashboard (e.g. smtp.gmail.com)
+        sync: false
       - key: SMTP_PORT
         value: 587
       - key: SMTP_USER
-        sync: false   # Set in Render dashboard
+        sync: false
       - key: SMTP_PASS
-        sync: false   # Set in Render dashboard
+        sync: false
       - key: EMAIL_FROM
-        sync: false   # Set in Render dashboard
+        sync: false
