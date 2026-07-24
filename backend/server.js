@@ -1,13 +1,83 @@
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
+dotenv.config();
 const mongoose = require("mongoose");
+const { Pool } = require("pg");
 const connectDB = require("./config/db");
-const User = require("./models/User");
-const Task = require("./models/Task");
-const Role = require("./models/Role");
-const Notification = require("./models/Notification");
-const Audit = require("./models/Audit");
+const MongoUser = require("./models/User");
+const MongoTask = require("./models/Task");
+const MongoRole = require("./models/Role");
+const MongoNotification = require("./models/Notification");
+const MongoAudit = require("./models/Audit");
+const MongoGroup = require("./models/Group");
+const MongoChatMessage = require("./models/ChatMessage");
+let User, Task, Role, Notification, Audit, Group, ChatMessage;
+const DB_MODE = (process.env.DB_MODE || "mongodb").toLowerCase();
+const PORT = process.env.PORT || 3000;
+const chatConfig = {
+  usersCanChatWithManagers: false,
+  usersCanChatWithCtos: false,
+  usersCanChatWithCfos: false,
+  managersCanChatWithCtos: true,
+  departmentChatEnabled: true,
+};
+const activeSockets = new Map();
+const chatGroups = new Map();
+const privateChatHistory = new Map();
+const groupChatHistory = new Map();
+const departmentChatHistory = new Map();
+
+const getPrivateConversationKey = (userA, userB) => {
+  const ids = [userA.toString(), userB.toString()].sort();
+  return ids.join(":");
+};
+
+const savePrivateMessage = (payload) => {
+  const key = getPrivateConversationKey(payload.from.id, payload.to);
+  const history = privateChatHistory.get(key) || [];
+  history.push(payload);
+  privateChatHistory.set(key, history.slice(-200));
+};
+
+const saveGroupMessage = (groupId, payload) => {
+  const history = groupChatHistory.get(groupId) || [];
+  history.push(payload);
+  groupChatHistory.set(groupId, history.slice(-200));
+};
+
+const saveDepartmentMessage = (department, payload) => {
+  const history = departmentChatHistory.get(department) || [];
+  history.push(payload);
+  departmentChatHistory.set(department, history.slice(-200));
+};
+
+const sendMessageToUser = (userId, payload) => {
+  const connection = activeSockets.get(userId);
+  if (connection) {
+    sendWsMessage(connection.socket, payload);
+  }
+};
+
+const broadcastGroup = async (groupId, payload) => {
+  // Try to find in database first
+  let group = await Group.findById(groupId);
+  if (!group) {
+    // Fall back to in-memory groups
+    group = chatGroups.get(groupId);
+  }
+  
+  if (!group) return;
+  
+  const memberIds = group.members?.map(m => m.toString ? m.toString() : m) || [];
+  for (const memberId of memberIds) {
+    sendMessageToUser(memberId, payload);
+  }
+};
+
+const http = require("http");
+const url = require("url");
+const WebSocket = require("ws");
 const { randomUUID } = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -19,7 +89,7 @@ const { base32 } = require('@otplib/plugin-base32-scure');
 const QRCode = require("qrcode");
 const { logMiddleware, startLogArchiver } = require('./utils/logger');
 
-dotenv.config();
+// dotenv.config(); // already configured above
 
 // =====================================
 // Redis Client & Caching Setup
@@ -31,20 +101,22 @@ let isRedisConnected = false;
 const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
 redisClient = redis.createClient({ url: redisUrl });
 
-const isRedisReady = () => Boolean(redisClient && isRedisConnected && redisClient.isOpen);
+// Optional connection: try to connect, but continue with in‑memory cache on failure
+(async () => {
+  try {
+    await redisClient.connect();
+    console.log("✅ Redis Client Connected");
+    isRedisConnected = true;
+  } catch (err) {
+    console.warn("⚠️ Redis connection failed – falling back to in‑memory cache:", err?.message || err);
+    isRedisConnected = false;
+  }
+})();
 
+// Event listeners remain for when connection succeeds later
 redisClient.on("error", (err) => {
   console.warn("⚠️ Redis Client Error:", err?.message || err);
   isRedisConnected = false;
-});
-
-redisClient.on("connect", () => {
-  console.log("✅ Redis Client Connected");
-});
-
-redisClient.on("ready", () => {
-  console.log("✅ Redis Client Ready");
-  isRedisConnected = true;
 });
 
 redisClient.on("end", () => {
@@ -52,13 +124,13 @@ redisClient.on("end", () => {
   isRedisConnected = false;
 });
 
+function isRedisReady() {
+  // Returns true if Redis client is connected and ready for commands
+  return isRedisConnected && redisClient && typeof redisClient.isOpen !== 'undefined' ? redisClient.isOpen : false;
+}
+
 redisClient.on("reconnecting", () => {
   console.log("🔄 Redis reconnecting...");
-});
-
-redisClient.connect().catch((err) => {
-  console.warn("⚠️ Redis connection failed. Caching & Rate Limiting will fallback to in-memory store.", err?.message || err);
-  isRedisConnected = false;
 });
 
 // Memory fallback stores
@@ -165,15 +237,29 @@ const rateLimitMiddleware = async (req, res, next) => {
 
 const path = require('path');
 const app = express();
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server, path: '/chat' });
+wss.activeSockets = activeSockets;
+wss.chatGroups = chatGroups;
+wss.privateChatHistory = privateChatHistory;
+wss.groupChatHistory = groupChatHistory;
+wss.departmentChatHistory = departmentChatHistory;
+wss.sendMessageToUser = sendMessageToUser;
+wss.broadcastGroup = broadcastGroup;
+const initChatSocket = require('./sockets/chatSocket');
+initChatSocket(wss);
 app.use(cors());
 const frontendPath = path.resolve(__dirname, 'frontend');
 console.log('🔧 Frontend path resolved to:', frontendPath);
-app.use(express.json());
+app.use(express.json({ limit: '20mb' }));
+app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 app.use(logMiddleware);
 app.use("/api", rateLimitMiddleware);
+app.use('/api/chat', require('./routes/chatRoutes'));
 // MongoDB connection will be initialized after seedRoles() is defined.
 // Serve static employee-facing frontend files
 app.use(express.static(frontendPath));
+app.use('/api/auth', require('./routes/authRoutes'));
 app.get('/', (req, res) => {
   res.sendFile(path.join(frontendPath, 'login.html'));
 });
@@ -575,6 +661,7 @@ const ensureTables = async () => {
       password TEXT,
       role TEXT NOT NULL DEFAULT 'user',
       designation TEXT DEFAULT '',
+      department TEXT DEFAULT '',
       approved BOOLEAN DEFAULT false,
       otp TEXT,
       otp_expiry BIGINT,
@@ -664,28 +751,68 @@ const connectWithRetry = async () => {
   }
 };
 
-// connectWithRetry(); // Disabled for MongoDB mode
+const initDatabase = async () => {
+  if (DB_MODE === 'postgres') {
+    try {
+      console.log('Attempting PostgreSQL connection...');
+      await runQuery('SELECT 1');
+      console.log('✅ PostgreSQL connected');
+      await ensureTables();
+      console.log('✅ PostgreSQL tables ensured');
+      User = createModel('users');
+      Task = createModel('tasks');
+      Role = createModel('roles');
+      Notification = createModel('notifications');
+      Audit = createModel('audits');
+      await seedRoles();
+      console.log('Default roles initialized in PostgreSQL');
+    } catch (err) {
+      console.error('PostgreSQL initialization error:', err?.message || err);
+      console.error(err?.stack || err);
+      process.exit(1);
+    }
+  } else {
+    await connectDB();
+    User = MongoUser;
+    Task = MongoTask;
+    Role = MongoRole;
+    Notification = MongoNotification;
+    Audit = MongoAudit;
+    Group = MongoGroup;
+    ChatMessage = MongoChatMessage;
+    await seedRoles();
+    console.log('Default roles initialized in MongoDB');
+  }
+};
 
 process.on('SIGINT', async () => {
   try {
-    await mongoose.disconnect();
-    console.log('MongoDB connection closed (SIGINT)');
+    if (DB_MODE === 'postgres') {
+      await pool.end();
+      console.log('PostgreSQL connection closed (SIGINT)');
+    } else {
+      await mongoose.disconnect();
+      console.log('MongoDB connection closed (SIGINT)');
+    }
   } catch (err) {
-    console.warn('Error closing MongoDB connection:', err?.message || err);
+    console.warn('Error closing database connection:', err?.message || err);
   }
   process.exit(0);
 });
 process.on('SIGTERM', async () => {
   try {
-    await mongoose.disconnect();
-    console.log('MongoDB connection closed (SIGTERM)');
+    if (DB_MODE === 'postgres') {
+      await pool.end();
+      console.log('PostgreSQL connection closed (SIGTERM)');
+    } else {
+      await mongoose.disconnect();
+      console.log('MongoDB connection closed (SIGTERM)');
+    }
   } catch (err) {
-    console.warn('Error closing MongoDB connection:', err?.message || err);
+    console.warn('Error closing database connection:', err?.message || err);
   }
   process.exit(0);
 });
-
-// MongoDB models are used instead of PostgreSQL query helpers
 
 const seedRoles = async () => {
   const defaultRoles = [
@@ -702,13 +829,6 @@ const seedRoles = async () => {
     } }, { upsert: true });
   }
 };
-
-connectDB()
-  .then(() => seedRoles())
-  .catch((err) => {
-    console.error('MongoDB initialization failed:', err?.message || err);
-    process.exit(1);
-  });
 
 // =====================================
 // Helper: create an in-app notification
@@ -920,7 +1040,7 @@ app.delete("/api/admin/roles/:id", authMiddleware, adminMiddleware, async (req, 
 
 app.post("/api/register", async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
+    const { name, email, password, role, profilePicture } = req.body;
 
     if (!name || !email || !password) {
       return res.status(400).json({
@@ -963,6 +1083,7 @@ app.post("/api/register", async (req, res) => {
       password: hashedPassword,
       role: isFirstAdmin ? "admin" : requestedRole,
       approved: isFirstAdmin,
+      profilePicture: profilePicture || "",
     });
 
     await user.save();
@@ -1003,10 +1124,13 @@ app.post("/api/login", async (req, res) => {
       });
     }
 
-    // Allow the first admin to log in if no approved admin exists yet.
-    const approvedAdminExists = await User.exists({ role: "admin", approved: true });
-    if (!user.approved && !(user.role === "admin" && !approvedAdminExists)) {
-      return res.status(403).json({ message: "Account pending admin approval" });
+    // Auto-approve admin users on login. Non-admin users require approval.
+    if (user.role === "admin" && !user.approved) {
+      user.approved = true;
+      await user.save();
+    } else if (!user.approved) {
+      console.log(`Login attempt for unapproved user: ${email}, role: ${user.role}`);
+      return res.status(403).json({ message: "Account pending admin approval. Please wait for admin to review your request." });
     }
 
     const isMatch = await bcrypt.compare(
@@ -1085,10 +1209,12 @@ app.post("/api/login", async (req, res) => {
           `,
         });
 
+        const isMock = !process.env.EMAIL_HOST || process.env.EMAIL_HOST.includes('example');
         return res.json({
           requiresMFA: true,
           mfaMethod: "email",
           email: user.email,
+          mockOtp: isMock ? otp : undefined
         });
       } else if (user.mfaMethod === "totp") {
         return res.json({
@@ -1161,6 +1287,7 @@ app.put(
       if (req.body.name !== undefined) user.name = req.body.name;
       if (req.body.email !== undefined) user.email = req.body.email;
       if (req.body.designation !== undefined) user.designation = req.body.designation;
+          if (req.body.department !== undefined) user.department = req.body.department;
       if (req.body.profilePicture !== undefined) user.profilePicture = req.body.profilePicture;
 
       await user.save();
@@ -1171,6 +1298,7 @@ app.put(
           email: user.email,
           role: user.role,
           designation: user.designation,
+          department: user.department,
           profilePicture: user.profilePicture
         }
       });
@@ -1350,7 +1478,7 @@ app.post("/api/verify-mfa", async (req, res) => {
     } else if (user.mfaMethod === "totp") {
       console.log('🔐 TOTP verification', { secret: user.mfaSecret, token: code });
       const isValid = await verify({ token: code, secret: user.mfaSecret, crypto, base32 });
-      if (!isValid) {
+      if (!isValid.valid) {
         return res.json({ message: "Invalid Authenticator App code" });
       }
     } else {
@@ -1440,7 +1568,11 @@ app.post("/api/mfa/setup", authMiddleware, async (req, res) => {
         `,
       });
 
-      res.json({ message: "Verification code sent to your email" });
+      const isMock = !process.env.EMAIL_HOST || process.env.EMAIL_HOST.includes('example');
+      res.json({ 
+        message: "Verification code sent to your email",
+        mockOtp: isMock ? otp : undefined
+      });
     } else if (method === "totp") {
       const secret = generateSecret({ crypto, base32 });
       console.log('🔐 Generated TOTP secret for setup', { email: user.email, secret });
@@ -1486,7 +1618,7 @@ app.post("/api/mfa/verify-setup", authMiddleware, async (req, res) => {
     } else if (method === "totp") {
       const isValid = await verify({ token: code, secret: user.mfaSecret, crypto, base32 });
 
-      if (!isValid) {
+      if (!isValid.valid) {
         return res.json({ message: "Invalid Authenticator App code" });
       }
 
@@ -1528,8 +1660,8 @@ app.post("/api/mfa/disable", authMiddleware, async (req, res) => {
     }
 
     user.mfaEnabled = false;
-    user.mfaMethod = "none";
-    user.mfaSecret = "";
+    user.mfaMethod = null;
+    user.mfaSecret = null;
     user.otp = null;
     user.otpExpiry = null;
     await user.save();
@@ -1636,9 +1768,10 @@ app.post("/api/forgot-password", async (req, res) => {
       `,
     });
 
+    const isMock = !process.env.EMAIL_HOST || process.env.EMAIL_HOST.includes('example');
     res.json({
-      message:
-        "OTP sent successfully. OTP valid for 15 minutes.",
+      message: "OTP sent successfully. OTP valid for 15 minutes.",
+      mockOtp: isMock ? otp : undefined
     });
   } catch (error) {
     console.log(error);
@@ -1669,9 +1802,13 @@ app.post("/api/verify-otp", async (req, res) => {
       });
     }
 
-    // CHECK OTP
+    // CHECK OTP - Compare as strings
+    const otpStr = String(otp).trim();
+    const userOtpStr = String(user.otp).trim();
+    
+    console.log('OTP Verification:', { provided: otpStr, stored: userOtpStr, match: otpStr === userOtpStr });
 
-    if (user.otp !== otp) {
+    if (userOtpStr !== otpStr) {
       return res.json({
         message: "Invalid OTP",
       });
@@ -1902,7 +2039,7 @@ app.get(
   async (req, res) => {
     try {
       const users = await User.find().select(
-        "name email role designation canUpdateTasks canDeleteTasks canUpdateUsers canDeleteUsers approved managerId ctoId profilePicture"
+        "name email role designation department canUpdateTasks canDeleteTasks canUpdateUsers canDeleteUsers approved managerId ctoId profilePicture"
       );
 
       res.json(users);
@@ -1922,7 +2059,7 @@ app.post(
   adminMiddleware,
   async (req, res) => {
     try {
-      const { name, email, password, role, designation } = req.body;
+      const { name, email, password, role, designation, department, profilePicture } = req.body;
 
       if (!name || !email || !password) {
         return res.status(400).json({ message: "Name, email, and password are required" });
@@ -1941,6 +2078,8 @@ app.post(
         password: hashedPassword,
         role: newRole,
         designation: designation || "",
+        department: department || "",
+        profilePicture: profilePicture || "",
         approved: true,
       });
 
@@ -2448,6 +2587,11 @@ app.put(
       if (req.body.name !== undefined) targetUser.name = req.body.name;
       if (req.body.email !== undefined) targetUser.email = req.body.email;
       if (req.body.designation !== undefined) targetUser.designation = req.body.designation;
+      if (req.body.department !== undefined) targetUser.department = req.body.department;
+      if (req.body.profilePicture !== undefined) targetUser.profilePicture = req.body.profilePicture;
+      if (req.body.password !== undefined && req.body.password !== "") {
+        targetUser.password = await bcrypt.hash(req.body.password, 10);
+      }
       if (req.body.role !== undefined) targetUser.role = req.body.role;
 
       if (req.body.role !== undefined) {
@@ -2525,6 +2669,7 @@ app.delete(
         });
       }
 
+      await Task.updateMany({ userId: targetUser._id }, { userId: null });
       await User.findByIdAndDelete(req.params.id);
 
       res.json({
@@ -2715,11 +2860,709 @@ app.get("/test-mail", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 5000;
+// PORT defined earlier
 
-app.listen(PORT, () => {
-  console.log(
-    `Server running on port ${PORT}`
-  );
-  startLogArchiver();
+const sendWsMessage = (ws, payload) => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(payload));
+  }
+};
+
+const broadcastToDepartment = async (department, payload) => {
+  if (!department) return;
+  for (const [userId, connection] of activeSockets.entries()) {
+    if (connection.user && connection.user.department === department) {
+      sendWsMessage(connection.socket, payload);
+    }
+  }
+};
+
+const canSendPrivateMessage = (fromUser, toUser) => {
+  if (!fromUser || !toUser) return false;
+  
+  const roleA = fromUser.role;
+  const roleB = toUser.role;
+  
+  // Admin to all users (including managers, cto, cfo, etc.)
+  if (roleA === 'admin' || roleB === 'admin') return true;
+  
+  // Users to users
+  if (roleA === 'user' && roleB === 'user') return true;
+  
+  // Managers to users (symmetric)
+  if ((roleA === 'manager' && roleB === 'user') || (roleA === 'user' && roleB === 'manager')) return true;
+  
+  // CTO to managers and users (symmetric)
+  if ((roleA === 'cto' && (roleB === 'manager' || roleB === 'user')) || ((roleA === 'manager' || roleA === 'user') && roleB === 'cto')) return true;
+  
+  return false;
+};
+
+const getUserForConnection = async (token) => {
+  if (!token) return null;
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (!decoded?.id) return null;
+    return await User.findById(decoded.id);
+  } catch (error) {
+    return null;
+  }
+};
+
+wss.on('connection', async (ws, req) => {
+  const parsedUrl = url.parse(req.url, true);
+  const token = parsedUrl.query?.token;
+  const user = await getUserForConnection(token);
+  if (!user) {
+    ws.close(1008, 'Unauthorized');
+    return;
+  }
+
+  const userId = user._id.toString();
+  activeSockets.set(userId, { socket: ws, user });
+  sendWsMessage(ws, { type: 'system', message: `Connected as ${user.name}`, timestamp: new Date().toISOString() });
+
+  ws.on('message', async (rawMessage) => {
+    let data;
+    try {
+      data = JSON.parse(rawMessage.toString());
+    } catch (error) {
+      return sendWsMessage(ws, { type: 'error', message: 'Invalid message format' });
+    }
+
+    if (data.type === 'private') {
+      if (!data.to || !data.message) {
+        return sendWsMessage(ws, { type: 'error', message: 'Private messages require a recipient and message' });
+      }
+      const recipient = await User.findById(data.to);
+      if (!recipient) {
+        return sendWsMessage(ws, { type: 'error', message: 'Recipient not found' });
+      }
+      if (!canSendPrivateMessage(user, recipient)) {
+        return sendWsMessage(ws, { type: 'error', message: 'Not authorized to message this user' });
+      }
+      
+      // Save to database
+      const chatMsg = new ChatMessage({
+        sender: user._id,
+        senderName: user.name,
+        senderRole: user.role,
+        messageType: 'private',
+        recipient: recipient._id,
+        message: data.message,
+      });
+      await chatMsg.save();
+      
+      const payload = {
+        type: 'private',
+        _id: chatMsg._id.toString(),
+        from: { id: userId, name: user.name, role: user.role },
+        to: recipient._id.toString(),
+        message: data.message,
+        timestamp: chatMsg.createdAt.toISOString(),
+      };
+      savePrivateMessage(payload);
+      const recipientConnection = activeSockets.get(recipient._id.toString());
+      if (recipientConnection) sendWsMessage(recipientConnection.socket, payload);
+      sendWsMessage(ws, { ...payload, self: true });
+      return;
+    }
+
+    if (data.type === 'group') {
+      if (!data.groupId || !data.message) {
+        return sendWsMessage(ws, { type: 'error', message: 'Group messages require a group and message' });
+      }
+      
+      // Check if group exists in MongoDB
+      let chatGroup = await Group.findById(data.groupId);
+      if (!chatGroup) {
+        // Fallback to in-memory groups
+        chatGroup = chatGroups.get(data.groupId);
+        if (!chatGroup) {
+          return sendWsMessage(ws, { type: 'error', message: 'Group not found' });
+        }
+      }
+      
+      // Check if user is a member
+      const memberIds = chatGroup.members?.map(m => m.toString()) || chatGroup.members || [];
+      if (!memberIds.includes(userId)) {
+        return sendWsMessage(ws, { type: 'error', message: 'You are not a member of this group' });
+      }
+      
+      // Save message to database
+      const chatMsg = new ChatMessage({
+        sender: user._id,
+        senderName: user.name,
+        senderRole: user.role,
+        messageType: 'group',
+        group: data.groupId,
+        message: data.message,
+      });
+      await chatMsg.save();
+      
+      const payload = {
+        type: 'group',
+        _id: chatMsg._id.toString(),
+        groupId: data.groupId,
+        groupName: chatGroup.name,
+        from: { id: userId, name: user.name, role: user.role },
+        message: data.message,
+        timestamp: chatMsg.createdAt.toISOString(),
+      };
+      
+      saveGroupMessage(data.groupId, payload);
+      await broadcastGroup(data.groupId, payload);
+      
+      // Update group last message and activity
+      if (chatGroup._id) {
+        await Group.findByIdAndUpdate(data.groupId, {
+          lastMessage: data.message,
+          lastActivity: new Date(),
+        });
+      }
+      return;
+    }
+
+    if (data.type === 'department') {
+      if (!chatConfig.departmentChatEnabled) {
+        return sendWsMessage(ws, { type: 'error', message: 'Department chat is disabled by admin' });
+      }
+      if (!user.department) {
+        return sendWsMessage(ws, { type: 'error', message: 'You need a department to join department chat' });
+      }
+      
+      // Save to database
+      const chatMsg = new ChatMessage({
+        sender: user._id,
+        senderName: user.name,
+        senderRole: user.role,
+        messageType: 'department',
+        department: user.department,
+        message: data.message,
+      });
+      await chatMsg.save();
+      
+      const payload = {
+        type: 'department',
+        _id: chatMsg._id.toString(),
+        department: user.department,
+        from: { id: userId, name: user.name, role: user.role },
+        message: data.message,
+        timestamp: chatMsg.createdAt.toISOString(),
+      };
+      saveDepartmentMessage(user.department, payload);
+      await broadcastToDepartment(user.department, payload);
+      return;
+    }
+
+    if (data.type === 'bot') {
+      if (!chatConfig.departmentChatEnabled) {
+        return sendWsMessage(ws, { type: 'error', message: 'Department bot chat is disabled by admin' });
+      }
+      const department = user.department || 'General';
+      const botResponse = `Hello ${user.name}, the ${department} bot heard you: "${data.message || '...'}". I can help with workflow updates, department status, and role routing.`;
+      const payload = {
+        type: 'bot',
+        department,
+        from: { id: 'bot', name: `${department} Bot`, role: 'bot' },
+        message: botResponse,
+        timestamp: new Date().toISOString(),
+      };
+      saveDepartmentMessage(department, payload);
+      await broadcastToDepartment(department, payload);
+      return;
+    }
+
+    if (data.type === 'ping') {
+      return sendWsMessage(ws, { type: 'pong', timestamp: new Date().toISOString() });
+    }
+
+    return sendWsMessage(ws, { type: 'error', message: 'Unknown chat message type' });
+  });
+
+  ws.on('close', () => {
+    activeSockets.delete(userId);
+  });
 });
+
+app.get('/api/chat/targets', authMiddleware, async (req, res) => {
+  try {
+    const users = await User.find({ approved: true }).select('name email role designation department managerId ctoId profilePicture');
+    const allowed = users
+      .filter((user) => user._id.toString() !== req.user.id)
+      .filter((user) => canSendPrivateMessage(req.user, user));
+    res.json({ targets: allowed, chatConfig });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Failed to fetch chat targets' });
+  }
+});
+
+app.get('/api/chat/departments', authMiddleware, async (req, res) => {
+  try {
+    const users = await User.find({ approved: true }).select('department');
+    const departments = [...new Set(users.map((user) => (user.department || 'General')).filter(Boolean))];
+    res.json({ departments, chatConfig });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Failed to fetch departments' });
+  }
+});
+
+app.get('/api/chat/groups', authMiddleware, async (req, res) => {
+  try {
+    // Fetch from MongoDB
+    let groups = await Group.find({
+      $or: [
+        { members: req.user.id },
+        { createdBy: req.user.id },
+      ],
+      isArchived: false,
+    }).populate('members', 'name role department email').populate('createdBy', 'name');
+    
+    // Fallback to in-memory if MongoDB returns nothing
+    if (groups.length === 0) {
+      groups = Array.from(chatGroups.values()).filter((group) => {
+        return req.user.role === 'admin' || group.members.includes(req.user.id);
+      });
+    } else {
+      // Transform MongoDB documents to match expected format
+      groups = groups.map(group => ({
+        _id: group._id.toString(),
+        id: group._id.toString(),
+        name: group.name,
+        description: group.description,
+        members: group.members.map(m => ({
+          id: m._id.toString(),
+          name: m.name,
+          role: m.role,
+          department: m.department,
+          email: m.email,
+        })),
+        createdBy: group.createdBy._id.toString(),
+        createdAt: group.createdAt.toISOString(),
+        lastMessage: group.lastMessage,
+        lastActivity: group.lastActivity.toISOString(),
+      }));
+    }
+    
+    res.json({ groups, chatConfig });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Failed to fetch chat groups' });
+  }
+});
+
+app.post('/api/chat/groups', authMiddleware, async (req, res) => {
+  try {
+    const { name, memberIds, description, isDepartmentGroup, department } = req.body || {};
+    if (!name) {
+      return res.status(400).json({ message: 'Group name is required' });
+    }
+    
+    let finalMembers = Array.from(new Set([req.user.id, ...((memberIds && Array.isArray(memberIds)) ? memberIds : [])]));
+    
+    // If department group, add all users from that department (excluding those without department)
+    if (isDepartmentGroup && department) {
+      const deptUsers = await User.find({ 
+        department: department,
+        approved: true,
+        _id: { $ne: req.user.id }
+      }).select('_id');
+      const deptUserIds = deptUsers.map(u => u._id.toString());
+      finalMembers = Array.from(new Set([...finalMembers, ...deptUserIds]));
+    }
+    
+    if (finalMembers.length < 2) {
+      return res.status(400).json({ message: 'Group must have at least 2 members' });
+    }
+    
+    const members = await User.find({ _id: { $in: finalMembers }, approved: true }).select('name role department');
+    if (members.length !== finalMembers.length) {
+      return res.status(400).json({ message: 'One or more group members are invalid or not approved' });
+    }
+    
+    // Check if creator can add all members (based on role restrictions)
+    const invalid = members.some((member) => {
+      if (member._id.toString() === req.user.id) return false;
+      // If it is a department group, bypass checking members in that department
+      if (isDepartmentGroup && department && member.department === department) return false;
+      return !canSendPrivateMessage(req.user, member);
+    });
+    
+    if (invalid) {
+      return res.status(403).json({ message: 'You cannot create a group with one or more selected members due to role restrictions' });
+    }
+    
+    // Create group in MongoDB
+    const group = new Group({
+      name,
+      description: description || (isDepartmentGroup ? `Department: ${department}` : ''),
+      members: finalMembers,
+      createdBy: req.user.id,
+      isDepartmentGroup: isDepartmentGroup || false,
+      department: department || null,
+    });
+    
+    await group.save();
+    
+    // Also save to in-memory for quick lookup
+    chatGroups.set(group._id.toString(), {
+      id: group._id.toString(),
+      name: group.name,
+      members: finalMembers,
+      createdBy: req.user.id,
+      isDepartmentGroup: isDepartmentGroup || false,
+      department: department || null,
+      createdAt: group.createdAt.toISOString(),
+      lastMessage: null,
+      lastActivity: new Date().toISOString(),
+    });
+    
+    res.json({ 
+      message: 'Group created successfully', 
+      group: {
+        _id: group._id.toString(),
+        name: group.name,
+        description: group.description,
+        members: finalMembers,
+        isDepartmentGroup: isDepartmentGroup || false,
+        department: department || null,
+        createdBy: req.user.id,
+        createdAt: group.createdAt.toISOString(),
+      }
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Failed to create chat group' });
+  }
+});
+
+app.delete('/api/chat/groups/:id', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Only admins can delete chat groups' });
+    }
+    
+    const groupId = req.params.id;
+    
+    if (Group) {
+      const group = await Group.findByIdAndDelete(groupId);
+      if (!group && !chatGroups.has(groupId)) {
+        return res.status(404).json({ message: 'Group not found' });
+      }
+    }
+    
+    chatGroups.delete(groupId);
+    
+    if (ChatMessage) {
+      await ChatMessage.deleteMany({ group: groupId });
+    }
+    
+    res.json({ message: 'Group deleted successfully' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Failed to delete group' });
+  }
+});
+
+app.get('/api/chat/history', authMiddleware, async (req, res) => {
+  try {
+    const { type, withId, groupId, department, page = 1, limit = 50 } = req.query;
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const pageLimit = Math.min(200, Math.max(1, parseInt(limit) || 50));
+    const skip = (pageNum - 1) * pageLimit;
+    
+    if (type === 'private') {
+      if (!withId) return res.status(400).json({ message: 'Missing private chat target' });
+      const target = await User.findById(withId);
+      if (!target) return res.status(404).json({ message: 'Target user not found' });
+      if (req.user.role !== 'admin' && !canSendPrivateMessage(req.user, target) && !canSendPrivateMessage(target, req.user)) {
+        return res.status(403).json({ message: 'Not authorized to view this chat history' });
+      }
+      
+      // Fetch from MongoDB
+      const messages = await ChatMessage.find({
+        messageType: 'private',
+        $or: [
+          { sender: req.user.id, recipient: withId },
+          { sender: withId, recipient: req.user.id },
+        ],
+        isDeleted: false,
+      }).sort({ createdAt: -1 }).skip(skip).limit(pageLimit).populate('sender', 'name role');
+      
+      const total = await ChatMessage.countDocuments({
+        messageType: 'private',
+        $or: [
+          { sender: req.user.id, recipient: withId },
+          { sender: withId, recipient: req.user.id },
+        ],
+        isDeleted: false,
+      });
+      
+      const history = messages.map(msg => ({
+        type: 'private',
+        _id: msg._id.toString(),
+        from: { id: msg.sender._id.toString(), name: msg.sender.name, role: msg.sender.role },
+        to: withId,
+        message: msg.message,
+        timestamp: msg.createdAt.toISOString(),
+      }));
+      
+      return res.json({ history: history.reverse(), total, page: pageNum, limit: pageLimit });
+    }
+    
+    if (type === 'group') {
+      if (!groupId) return res.status(400).json({ message: 'Missing group id' });
+      const group = await Group.findById(groupId);
+      if (!group) return res.status(404).json({ message: 'Group not found' });
+      if (req.user.role !== 'admin' && !group.members.includes(req.user.id)) {
+        return res.status(403).json({ message: 'Not a member of this group' });
+      }
+      
+      const messages = await ChatMessage.find({
+        messageType: 'group',
+        group: groupId,
+        isDeleted: false,
+      }).sort({ createdAt: -1 }).skip(skip).limit(pageLimit).populate('sender', 'name role department');
+      
+      const total = await ChatMessage.countDocuments({
+        messageType: 'group',
+        group: groupId,
+        isDeleted: false,
+      });
+      
+      const history = messages.map(msg => ({
+        type: 'group',
+        _id: msg._id.toString(),
+        groupId: groupId,
+        groupName: group.name,
+        from: { id: msg.sender._id.toString(), name: msg.sender.name, role: msg.sender.role },
+        message: msg.message,
+        timestamp: msg.createdAt.toISOString(),
+      }));
+      
+      return res.json({ history: history.reverse(), total, page: pageNum, limit: pageLimit });
+    }
+    
+    if (type === 'department') {
+      const dept = department?.toString();
+      if (!dept) return res.status(400).json({ message: 'Missing department' });
+      if (req.user.role !== 'admin' && req.user.department !== dept) {
+        return res.status(403).json({ message: 'Not authorized to view this department history' });
+      }
+      
+      const messages = await ChatMessage.find({
+        messageType: 'department',
+        department: dept,
+        isDeleted: false,
+      }).sort({ createdAt: -1 }).skip(skip).limit(pageLimit).populate('sender', 'name role');
+      
+      const total = await ChatMessage.countDocuments({
+        messageType: 'department',
+        department: dept,
+        isDeleted: false,
+      });
+      
+      const history = messages.map(msg => ({
+        type: 'department',
+        _id: msg._id.toString(),
+        department: dept,
+        from: { id: msg.sender._id.toString(), name: msg.sender.name, role: msg.sender.role },
+        message: msg.message,
+        timestamp: msg.createdAt.toISOString(),
+      }));
+      
+      return res.json({ history: history.reverse(), total, page: pageNum, limit: pageLimit });
+    }
+    
+    return res.status(400).json({ message: 'Unsupported history type' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Failed to load chat history' });
+  }
+});
+
+app.get('/api/admin/chat-config', authMiddleware, adminMiddleware, async (req, res) => {
+  res.json({ chatConfig });
+});
+
+app.put('/api/admin/chat-config', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const updates = req.body || {};
+    Object.assign(chatConfig, {
+      usersCanChatWithManagers: updates.usersCanChatWithManagers ?? chatConfig.usersCanChatWithManagers,
+      usersCanChatWithCtos: updates.usersCanChatWithCtos ?? chatConfig.usersCanChatWithCtos,
+      usersCanChatWithCfos: updates.usersCanChatWithCfos ?? chatConfig.usersCanChatWithCfos,
+      managersCanChatWithCtos: updates.managersCanChatWithCtos ?? chatConfig.managersCanChatWithCtos,
+      departmentChatEnabled: updates.departmentChatEnabled ?? chatConfig.departmentChatEnabled,
+    });
+    res.json({ message: 'Chat configuration updated', chatConfig });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Failed to update chat configuration' });
+  }
+});
+
+// Get all active chats for user (groups + private conversations)
+app.get('/api/chat/conversations', authMiddleware, async (req, res) => {
+  try {
+    // Get user's groups
+    const groups = await Group.find({
+      members: req.user.id,
+      isArchived: false,
+    }).sort({ lastActivity: -1 }).populate('members', 'name role department email').select('name description members lastMessage lastActivity createdAt');
+    
+    // Get recent private conversations
+    const userId = new mongoose.Types.ObjectId(req.user.id);
+    const recentConversations = await ChatMessage.aggregate([
+      {
+        $match: {
+          messageType: 'private',
+          isDeleted: false,
+          $or: [
+            { sender: userId },
+            { recipient: userId },
+          ],
+        },
+      },
+      {
+        $sort: { createdAt: -1 },
+      },
+      {
+        $group: {
+          _id: {
+            $cond: [
+              { $eq: ['$sender', userId] },
+              '$recipient',
+              '$sender',
+            ],
+          },
+          lastMessage: { $first: '$message' },
+          lastTimestamp: { $first: '$createdAt' },
+          senderName: { $first: '$senderName' },
+        },
+      },
+      {
+        $sort: { lastTimestamp: -1 },
+      },
+      {
+        $limit: 100,
+      },
+    ]);
+    
+    // Fetch details for private chat users
+    const userIds = recentConversations.map(c => c._id);
+    const users = await User.find({ _id: { $in: userIds } }).select('name role department email profilePicture');
+    const usersById = users.reduce((acc, user) => {
+      acc[user._id.toString()] = user;
+      return acc;
+    }, {});
+    
+    const privateChats = recentConversations.map(conv => ({
+      type: 'private',
+      conversationId: conv._id.toString(),
+      userId: conv._id.toString(),
+      name: usersById[conv._id.toString()]?.name || 'Unknown',
+      role: usersById[conv._id.toString()]?.role || 'user',
+      department: usersById[conv._id.toString()]?.department || '',
+      lastMessage: conv.lastMessage,
+      lastTimestamp: conv.lastTimestamp,
+      profilePicture: usersById[conv._id.toString()]?.profilePicture || '',
+    }));
+    
+    const groupChats = groups.map(g => ({
+      type: 'group',
+      conversationId: g._id.toString(),
+      groupId: g._id.toString(),
+      name: g.name,
+      description: g.description,
+      memberCount: g.members.length,
+      members: g.members.map(m => ({
+        id: m._id.toString(),
+        name: m.name,
+        role: m.role,
+        department: m.department,
+      })),
+      lastMessage: g.lastMessage,
+      lastTimestamp: g.lastActivity,
+    }));
+    
+    // Combine and sort by last activity
+    const allChats = [...groupChats, ...privateChats].sort((a, b) => {
+      const timeA = new Date(a.lastTimestamp || 0).getTime();
+      const timeB = new Date(b.lastTimestamp || 0).getTime();
+      return timeB - timeA;
+    });
+    
+    res.json({ conversations: allChats });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Failed to fetch conversations' });
+  }
+});
+
+// Get or create private chat conversation
+app.get('/api/chat/conversation/:userId', authMiddleware, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const otherUser = await User.findById(userId).select('name role department email profilePicture');
+    
+    if (!otherUser) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    if (req.user.role !== 'admin' && !canSendPrivateMessage(req.user, otherUser)) {
+      return res.status(403).json({ message: 'You cannot chat with this user' });
+    }
+    
+    res.json({
+      type: 'private',
+      conversationId: userId,
+      userId: userId,
+      name: otherUser.name,
+      role: otherUser.role,
+      department: otherUser.department,
+      profilePicture: otherUser.profilePicture,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Failed to get conversation' });
+  }
+});
+
+const startServer = async () => {
+  console.log(`Starting server in ${DB_MODE.toUpperCase()} mode`);
+  await initDatabase();
+  let port = PORT;
+  const maxAttempts = 10;
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      await new Promise((resolve, reject) => {
+        // Listen on the chosen port
+        server.listen(port, () => {
+          console.log(`Server running on port ${port}`);
+          resolve();
+        });
+        // Catch errors such as EADDRINUSE
+        server.once('error', (err) => {
+          reject(err);
+        });
+      });
+      break; // success, exit loop
+    } catch (err) {
+      if (err && err.code === 'EADDRINUSE') {
+        console.warn(`⚠️ Port ${port} already in use, trying next port`);
+        port++;
+        // Remove the error listener before next attempt
+        server.removeAllListeners('error');
+        continue;
+      }
+      console.error('Server start error:', err);
+      process.exit(1);
+    }
+  }
+  startLogArchiver();
+};
+
+startServer();

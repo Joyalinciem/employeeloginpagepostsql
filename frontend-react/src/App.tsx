@@ -93,6 +93,15 @@ function IconBriefcase({ size = 20, color = "currentColor" }: { size?: number; c
   );
 }
 
+function IconMessageCircle({ size = 20, color = "currentColor" }: { size?: number; color?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ display: "inline-block", verticalAlign: "middle" }}>
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      <path d="M8 9h8M8 13h5" />
+    </svg>
+  );
+}
+
 function IconSettings({ size = 20, color = "currentColor", style }: { size?: number; color?: string; style?: React.CSSProperties }) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ display: "inline-block", verticalAlign: "middle", ...style }}>
@@ -307,14 +316,14 @@ function App() {
   const [isManager, setIsManager] = useState(false);
   const [isCto, setIsCto] = useState(false);
 
-  type PageType = "tasks" | "admin" | "manager" | "cto" | "settings" | "add-task" | "profile";
+  type PageType = "tasks" | "admin" | "manager" | "cto" | "settings" | "add-task" | "profile" | "chat";
   const [currentPage, setCurrentPage] = useState<PageType>("tasks");
-  const [adminTab, setAdminTab] = useState<"users" | "tasks" | "pending" | "roles">("users");
+  const [adminTab, setAdminTab] = useState<"users" | "tasks" | "pending" | "roles" | "chat">("users");
   const [adminUsers, setAdminUsers] = useState<any[]>([]);
   const [adminTasks, setAdminTasks] = useState<any[]>([]);
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [roles, setRoles] = useState<any[]>([]);
-  const [newUserData, setNewUserData] = useState({ name: "", email: "", password: "", role: "user", designation: "" });
+  const [newUserData, setNewUserData] = useState({ name: "", email: "", password: "", role: "user", designation: "", department: "", profilePicture: "" });
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [roleCreateName, setRoleCreateName] = useState("");
   const [selectedRoleForRoleSettings, setSelectedRoleForRoleSettings] = useState("user");
@@ -329,6 +338,36 @@ function App() {
   const [profileDesignation, setProfileDesignation] = useState("");
   const [profilePicture, setProfilePicture] = useState("");
   const [profilePicturePreview, setProfilePicturePreview] = useState("");
+  const [profileDepartment, setProfileDepartment] = useState("");
+
+  // ── CHAT STATES ─────────────────────────────────────────────────────────
+  const [chatWs, setChatWs] = useState<WebSocket | null>(null);
+  const [chatTargets, setChatTargets] = useState<any[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_chatDepartments, setChatDepartments] = useState<string[]>([]);
+  const [chatConfig, setChatConfig] = useState<any>(null);
+  const [chatMode, setChatMode] = useState<"private" | "department" | "bot">("private");
+  const [selectedChatUser, setSelectedChatUser] = useState<any | null>(null);
+  const [selectedDepartment, setSelectedDepartment] = useState("");
+  const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_chatTargetSort, _setChatTargetSort] = useState<"department" | "name">("department");
+  const [chatConnected, setChatConnected] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [recipientName, _setRecipientName] = useState("");
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [chatConversations, setChatConversations] = useState<any[]>([]);
+  const [selectedConversation, setSelectedConversation] = useState<any | null>(null);
+  const [loadingChatHistory, setLoadingChatHistory] = useState(false);
+  const [groupCreationModalOpen, setGroupCreationModalOpen] = useState(false);
+  const [directMessageModalOpen, setDirectMessageModalOpen] = useState(false);
+  const [groupCreationName, setGroupCreationName] = useState("");
+  const [groupCreationMode, setGroupCreationMode] = useState<"direct" | "group">("direct");
+  const [groupCreationDepartment, setGroupCreationDepartment] = useState("");
+  const [groupCreationMembers, setGroupCreationMembers] = useState<string[]>([]);
+  const [autoAddedMembers, setAutoAddedMembers] = useState<string[]>([]);
+  const [selectedDirectUser, setSelectedDirectUser] = useState<any | null>(null);
 
   // ── PAGINATION ───────────────────────────────────────────────────────────
   const TASKS_PER_PAGE = 6;
@@ -368,7 +407,7 @@ function App() {
 
   // ── LOGIN / REGISTER ──────────────────────────────────────────────────────
   const [loginData, setLoginData] = useState({ email: "", password: "" });
-  const [registerData, setRegisterData] = useState({ name: "", email: "", password: "", role: "user" });
+  const [registerData, setRegisterData] = useState({ name: "", email: "", password: "", role: "user", profilePicture: "" });
   const [registerMessage, setRegisterMessage] = useState("");
   const [registerError, setRegisterError] = useState("");
   const [loginMessage, setLoginMessage] = useState("");
@@ -389,6 +428,399 @@ function App() {
   const showToast = (msg: string, type: "success" | "error" | "info" = "info") => {
     setToastMessage(msg);
     setToastType(type);
+  };
+
+  const fetchAdminChatConfig = async () => {
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_URL}/admin/chat-config`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) return;
+      const data = await response.json();
+      setChatConfig(data.chatConfig || null);
+    } catch (err) {
+      console.error("Failed to fetch admin chat config", err);
+    }
+  };
+
+  const updateAdminChatConfig = async (updates: any) => {
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_URL}/admin/chat-config`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(updates),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        showToast(data.message || "Failed to update chat settings", "error");
+        return;
+      }
+      setChatConfig(data.chatConfig || null);
+      showToast("Chat settings updated", "success");
+    } catch (err) {
+      console.error("Failed to update admin chat config", err);
+      showToast("Failed to update chat settings", "error");
+    }
+  };
+
+  const ensureChatConnection = async () => {
+    if (chatWs && chatWs.readyState === WebSocket.OPEN) return chatWs;
+    if (!token) return null;
+
+    const wsUrl = `ws://${window.location.hostname}:5000/chat?token=${token}`;
+    const ws = new WebSocket(wsUrl);
+    ws.addEventListener("open", () => {
+      console.log("Chat connected");
+      setChatConnected(true);
+      showToast("Connected to chat", "success");
+    });
+    ws.addEventListener("message", (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        
+        // Only add message if it matches current selected conversation or no conversation selected
+        if (selectedConversation) {
+          let shouldAdd = false;
+          if (selectedConversation.type === 'private' && data.type === 'private') {
+            const isRelevant = (data.from?.id === selectedConversation.userId) || (data.to === selectedConversation.userId);
+            shouldAdd = isRelevant;
+          } else if (selectedConversation.type === 'group' && data.type === 'group') {
+            shouldAdd = data.groupId === selectedConversation.groupId;
+          }
+          if (shouldAdd) {
+            setChatMessages((prev) => [...prev, data]);
+          }
+        } else {
+          setChatMessages((prev) => [...prev, data]);
+        }
+        
+        // Show toast notifications
+        if (data.type === "private" && !data.self && data.from?.name) {
+          showToast(`New message from ${data.from.name}`, "info");
+        }
+        if (data.type === "group" && data.from?.name) {
+          showToast(`${data.from.name}: ${(data.message || '').substring(0, 30)}...`, "info");
+        }
+        if (data.type === "department" && data.department) {
+          showToast(`New department message in ${data.department}`, "info");
+        }
+        if (data.type === "bot") {
+          showToast(`Bot reply received`, "info");
+        }
+        // Refresh sidebar conversation list so last-message previews stay current
+        fetchChatConversations();
+      } catch (err) {
+        console.error("Invalid chat event", err);
+      }
+    });
+    ws.addEventListener("close", () => {
+      console.log("Chat disconnected");
+      setChatWs(null);
+      setChatConnected(false);
+    });
+    ws.addEventListener("error", (err) => {
+      console.error("Chat WebSocket error", err);
+      showToast("Chat connection error", "error");
+    });
+    setChatWs(ws);
+    return ws;
+  };
+
+  const fetchChatTargets = async () => {
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_URL}/chat/targets`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) return;
+      const data = await response.json();
+      const targets = Array.isArray(data.targets)
+        ? [...data.targets].sort((a, b) => (a.department || "").localeCompare(b.department || "") || (a.name || "").localeCompare(b.name || ""))
+        : [];
+      setChatTargets(targets);
+      setChatConfig(data.chatConfig || null);
+      if (!selectedChatUser && targets.length > 0) {
+        setSelectedChatUser(targets[0]);
+      }
+    } catch (err) {
+      console.error("Failed to fetch chat targets", err);
+    }
+  };
+
+  const fetchChatDepartments = async () => {
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_URL}/chat/departments`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) return;
+      const data = await response.json();
+      setChatDepartments(data.departments || []);
+      setChatConfig(data.chatConfig || null);
+      if (!selectedDepartment && data.departments && data.departments.length > 0) {
+        setSelectedDepartment(data.departments[0]);
+      }
+    } catch (err) {
+      console.error("Failed to fetch chat departments", err);
+    }
+  };
+
+  const sendChatMessage = async () => {
+    if (!chatInput.trim()) {
+      showToast("Type a message before sending", "error");
+      return;
+    }
+    
+    // If using the WhatsApp-like UI with selected conversation
+    if (selectedConversation) {
+      const ws = await ensureChatConnection();
+      if (!ws) return showToast("Unable to connect to chat server", "error");
+      
+      const payload: any = { message: chatInput.trim() };
+      if (selectedConversation.type === 'private') {
+        payload.type = 'private';
+        payload.to = selectedConversation.userId;
+      } else if (selectedConversation.type === 'group') {
+        payload.type = 'group';
+        payload.groupId = selectedConversation.groupId;
+      }
+      
+      ws.send(JSON.stringify(payload));
+      setChatInput("");
+      return;
+    }
+    
+    // Legacy mode selection (for backward compatibility)
+    const ws = await ensureChatConnection();
+    if (!ws) return showToast("Unable to connect to chat server", "error");
+
+    const payload: any = { type: chatMode, message: chatInput.trim() };
+    if (chatMode === "private") {
+      // allow sending by typed name (partial match) or selected user
+      let target = selectedChatUser;
+      if (recipientName && recipientName.trim()) {
+        const match = chatTargets.find(u => (u.name || '').toLowerCase().includes(recipientName.trim().toLowerCase()));
+        if (match) target = match;
+      }
+      if (!target) return showToast("Select a user first or enter a recipient name", "error");
+      payload.to = target._id || target.id;
+    }
+    if (chatMode === "department") {
+      payload.department = selectedDepartment;
+    }
+    ws.send(JSON.stringify(payload));
+    setChatInput("");
+  };
+
+  const fetchChatConversations = async () => {
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_URL}/chat/conversations`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) return;
+      const data = await response.json();
+      setChatConversations(data.conversations || []);
+      if (!selectedConversation && data.conversations?.length > 0) {
+        setSelectedConversation(data.conversations[0]);
+      }
+    } catch (err) {
+      console.error("Failed to fetch conversations", err);
+    }
+  };
+
+  const fetchChatHistory = async (conversationType: 'private' | 'group' | 'department', targetId: string) => {
+    if (!token) return;
+    setLoadingChatHistory(true);
+    try {
+      let url = `${API_URL}/chat/history?type=${conversationType}&limit=50`;
+      if (conversationType === 'private') {
+        url += `&withId=${targetId}`;
+      } else if (conversationType === 'group') {
+        url += `&groupId=${targetId}`;
+      } else if (conversationType === 'department') {
+        url += `&department=${targetId}`;
+      }
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) return;
+      const data = await response.json();
+      setChatMessages(data.history || []);
+    } catch (err) {
+      console.error("Failed to fetch chat history", err);
+    } finally {
+      setLoadingChatHistory(false);
+    }
+  };
+
+  const openConversation = async (conversation: any) => {
+    setSelectedConversation(conversation);
+    if (conversation.type === 'group') {
+      setChatMode('group' as any);
+      await fetchChatHistory('group', conversation.groupId);
+    } else if (conversation.type === 'private') {
+      setChatMode('private');
+      await fetchChatHistory('private', conversation.userId);
+    }
+  };
+
+  const handleCreateGroup = async () => {
+    if (!groupCreationName.trim()) {
+      showToast("Please enter a group name", "error");
+      return;
+    }
+    
+    const finalMemberIds = Array.from(new Set(groupCreationMembers)).filter(
+      id => id !== (currentUser?.id || currentUser?._id)
+    );
+
+    if (finalMemberIds.length === 0) {
+      showToast("Please select at least one member to add to the group", "error");
+      return;
+    }
+
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_URL}/chat/groups`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          name: groupCreationName.trim(),
+          memberIds: finalMemberIds,
+          description: groupCreationDepartment ? `Department: ${groupCreationDepartment}` : '',
+          isDepartmentGroup: !!groupCreationDepartment,
+          department: groupCreationDepartment || null,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        showToast(data.message || 'Failed to create group', 'error');
+        return;
+      }
+      showToast('Group created successfully', 'success');
+      setGroupCreationName('');
+      setGroupCreationDepartment('');
+      setGroupCreationMembers([]);
+      setAutoAddedMembers([]);
+      setGroupCreationMode('direct');
+      setGroupCreationModalOpen(false);
+      await fetchChatConversations();
+    } catch (err) {
+      console.error("Failed to create group", err);
+      showToast('Failed to create group', 'error');
+    }
+  };
+
+  // ── DIRECT MESSAGE HELPERS ───────────────────────────────────────────────
+  const getEligibleDirectMessageUsers = () => {
+    if (!currentUser) return [];
+    
+    return chatTargets.filter(u => {
+      const uId = u._id || u.id;
+      const currentUserId = currentUser.id || currentUser._id;
+      if (uId === currentUserId) return false;
+      
+      const roleA = currentUser.role;
+      const roleB = u.role;
+      
+      // Admin to all users (including managers, cto, cfo, etc.)
+      if (roleA === 'admin' || roleB === 'admin') return true;
+      
+      // Users to users
+      if (roleA === 'user' && roleB === 'user') return true;
+      
+      // Managers to users (symmetric)
+      if ((roleA === 'manager' && roleB === 'user') || (roleA === 'user' && roleB === 'manager')) return true;
+      
+      // CTO to managers and users (symmetric)
+      if ((roleA === 'cto' && (roleB === 'manager' || roleB === 'user')) || ((roleA === 'manager' || roleA === 'user') && roleB === 'cto')) return true;
+      
+      return false;
+    });
+  };
+
+  // ── DEPARTMENT GROUP HELPERS ─────────────────────────────────────────────
+  const toggleMemberSelection = (userId: string) => {
+    setGroupCreationMembers(prev => {
+      if (prev.includes(userId)) {
+        return prev.filter(id => id !== userId);
+      } else {
+        return [...prev, userId];
+      }
+    });
+  };
+
+  const handleDepartmentSelect = (dept: string) => {
+    const oldDeptUsers = groupCreationDepartment 
+      ? chatTargets.filter(u => u.department === groupCreationDepartment && (u._id || u.id) !== currentUser?.id).map(u => u._id || u.id)
+      : [];
+      
+    setGroupCreationDepartment(dept);
+    
+    const newDeptUsers = dept 
+      ? chatTargets.filter(u => u.department === dept && (u._id || u.id) !== currentUser?.id).map(u => u._id || u.id)
+      : [];
+      
+    setGroupCreationMembers(prev => {
+      const filtered = prev.filter(id => !oldDeptUsers.includes(id));
+      return Array.from(new Set([...filtered, ...newDeptUsers]));
+    });
+  };
+
+  const sendDirectMessage = async (recipientId: string, message: string) => {
+    if (!token || !chatWs || chatWs.readyState !== WebSocket.OPEN) {
+      showToast('Not connected to chat', 'error');
+      return;
+    }
+    try {
+      const payload = {
+        type: 'private',
+        to: recipientId,
+        message,
+      };
+      chatWs.send(JSON.stringify(payload));
+      setChatInput('');
+    } catch (error) {
+      console.error('Error sending message:', error);
+      showToast('Failed to send message', 'error');
+    }
+  };
+
+  const handleDeleteGroup = async (groupId: string) => {
+    const confirm = await confirmDialog("Are you sure you want to delete this group? All message history will be permanently removed.");
+    if (!confirm) return;
+    
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_URL}/chat/groups/${groupId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        showToast(data.message || "Failed to delete group", "error");
+        return;
+      }
+      showToast("Group deleted successfully", "success");
+      setSelectedConversation(null);
+      await fetchChatConversations();
+    } catch (err) {
+      console.error("Failed to delete group", err);
+      showToast("Failed to delete group", "error");
+    }
+  };
+
+  const loadChatPage = async () => {
+    await Promise.all([
+      fetchChatTargets(),
+      fetchChatDepartments(),
+      fetchAdminChatConfig(),
+      fetchChatConversations(),
+    ]);
+    await ensureChatConnection();
   };
 
   useEffect(() => {
@@ -424,6 +856,9 @@ function App() {
           setMfaEmail(data.mfaEmail || loginData.email);
           setLoginMessage("MFA required");
           setShowOtpBlock(true);
+          if (data.mockOtp) {
+            showToast(`Mock Email OTP: ${data.mockOtp}`, "info");
+          }
           return;
         }
         if (!data.token) {
@@ -456,6 +891,8 @@ function App() {
       const data = await response.json();
       if (response.ok) {
         setRegisterMessage(data.message || "Registration successful");
+        setRegisterError("");
+        setRegisterData({ name: "", email: "", password: "", role: "user", profilePicture: "" });
         if (data.token) {
           localStorage.setItem("token", data.token);
           setToken(data.token);
@@ -497,17 +934,30 @@ function App() {
 
   // ── FORGOT PASSWORD ───────────────────────────────────────────────────────
   const handleSendOtp = async () => {
-    const response = await fetch(`${API_URL}/forgot-password`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: forgotEmail }),
-    });
-    const data = await response.json();
-    if (data.message.includes("OTP sent successfully")) {
-      setOtpMessage("OTP sent to your email. Valid for 15 minutes.");
-      setShowOtpBlock(true);
-    } else {
-      setOtpMessage(data.message);
+    try {
+      const response = await fetch(`${API_URL}/forgot-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: forgotEmail }),
+      });
+      const data = await response.json();
+
+      if (response.ok) {
+        setOtpMessage(data.message || "OTP sent to your email. Valid for 15 minutes.");
+        setShowOtpBlock(true);
+        if (data.mockOtp) {
+          showToast(`Mock Email OTP: ${data.mockOtp}`, "info");
+        }
+      } else {
+        const errMsg = data.message || "Failed to send OTP.";
+        showToast(errMsg, "error");
+        setOtpMessage(errMsg);
+      }
+    } catch (err) {
+      console.error("Error sending OTP:", err);
+      const msg = "Network error while sending OTP.";
+      showToast(msg, "error");
+      setOtpMessage(msg);
     }
   };
 
@@ -574,6 +1024,7 @@ function App() {
       setProfileName(data.name || "");
       setProfileEmail(data.email || "");
       setProfileDesignation(data.designation || "");
+      setProfileDepartment(data.department || "");
       setProfilePicture(data.profilePicture || "");
       setProfilePicturePreview(data.profilePicture || "");
       if (data.role === "admin") setCurrentPage("admin");
@@ -602,6 +1053,7 @@ function App() {
           name: profileName,
           email: profileEmail,
           designation: profileDesignation,
+          department: profileDepartment,
           profilePicture: profilePicture,
         }),
       });
@@ -661,10 +1113,13 @@ function App() {
     if (!authToken) return;
     const endpoint = isAdmin ? `${API_URL}/admin/users` : `${API_URL}/users`;
     const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${authToken}` } });
-    if (response.ok) {
-      const data = await response.json();
-      setAdminUsers(data);
-    }
+      if (response.ok) {
+        const data = await response.json();
+      const sorted = Array.isArray(data)
+        ? [...data].sort((a, b) => (a.department || "").localeCompare(b.department || "") || (a.name || "").localeCompare(b.name || ""))
+        : [];
+       setAdminUsers(sorted);
+     }
   };
 
   const fetchAdminTasks = async (authToken = token) => {
@@ -759,6 +1214,9 @@ function App() {
       if (adminTab === "users") fetchUsers();
       else if (adminTab === "roles") fetchRoles();
       else if (adminTab === "tasks") { fetchAdminTasks(); fetchUsers(); }
+      else if (adminTab === "chat") fetchAdminChatConfig();
+    } else if (currentPage === "chat") {
+      loadChatPage();
     } else if (currentPage === "manager" || currentPage === "cto" || (currentPage === "add-task" && (isAdmin || isManager || isCto))) {
       fetchUsers();
     } else if (currentPage === "tasks") {
@@ -871,6 +1329,20 @@ function App() {
   // ─────────────────────────────────────────────────────────────────────────
   // ADMIN USER MANAGEMENT
   // ─────────────────────────────────────────────────────────────────────────
+  const handleNewUserPhotoUpload = (e: any) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const MAX = 10 * 1024 * 1024;
+    if (file.size > MAX) {
+      showToast("File size exceeds 10MB limit. Please choose a smaller file.", "error");
+      e.target.value = "";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onloadend = () => setNewUserData({ ...newUserData, profilePicture: reader.result as string });
+    reader.readAsDataURL(file);
+  };
+
   const createAdminUser = async () => {
     if (!newUserData.name || !newUserData.email || !newUserData.password) {
       showToast("Please fill in name, email and password.", "error"); return;
@@ -883,13 +1355,50 @@ function App() {
     const data = await response.json();
     if (response.ok) {
       showToast("New user created and notified by email.", "success");
-      setNewUserData({ name: "", email: "", password: "", role: "user", designation: "" });
+      setNewUserData({ name: "", email: "", password: "", role: "user", designation: "", department: "", profilePicture: "" });
       fetchUsers();
     } else { showToast(data.message || "Failed to create user.", "error"); }
   };
 
+  const saveAdminUser = async () => {
+    if (!editingUserId || !newUserData.name || !newUserData.email) {
+      showToast("Please fill in name and email.", "error"); return;
+    }
+    const payload: any = {
+      name: newUserData.name,
+      email: newUserData.email,
+      designation: newUserData.designation,
+      role: newUserData.role,
+      department: newUserData.department,
+      profilePicture: newUserData.profilePicture,
+    };
+    if (newUserData.password) payload.password = newUserData.password;
+
+    const response = await fetch(`${API_URL}/users/${editingUserId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (response.ok) {
+      showToast("User updated successfully.", "success");
+      setEditingUserId(null);
+      setNewUserData({ name: "", email: "", password: "", role: "user", designation: "", department: "", profilePicture: "" });
+      fetchUsers();
+    } else { showToast(data.message || "Failed to update user.", "error"); }
+  };
+
   const loadUserForEdit = (user: any) => {
     setEditingUserId(user._id);
+    setNewUserData({
+      name: user.name || "",
+      email: user.email || "",
+      password: "",
+      role: user.role || "user",
+      designation: user.designation || "",
+      department: user.department || "",
+      profilePicture: user.profilePicture || "",
+    });
   };
 
   const deleteUser = async (userId: string) => {
@@ -1014,6 +1523,9 @@ function App() {
       if (method === "totp") { setMfaSetupQrCodeUrl(data.qrCodeUrl); setMfaSetupSecret(data.secret); }
       setMfaSetupStep("verify");
       setMfaSetupMessage(data.message || "MFA setup initialized. Please verify.");
+      if (data.mockOtp) {
+        showToast(`Mock Email OTP: ${data.mockOtp}`, "info");
+      }
     } else { setMfaSetupMessage(data.message || "Failed to initialize MFA setup"); }
   };
 
@@ -1096,13 +1608,176 @@ function App() {
     </div>
   ) : null;
 
+  const GroupCreationModal = () => groupCreationModalOpen ? (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
+      <div style={{ background: "#0b1220", padding: 28, borderRadius: 16, width: 440, boxShadow: "0 20px 60px rgba(0,0,0,0.6)", color: "#fff", border: "1px solid rgba(255,255,255,0.1)", display: "flex", flexDirection: "column", maxHeight: "90vh" }}>
+        <h3 style={{ marginBottom: 16, fontSize: 18, fontWeight: 600 }}>Create New Group</h3>
+        
+        <div style={{ display: "flex", flexDirection: "column", gap: 14, flex: 1, overflowY: "auto", paddingRight: 4 }}>
+          <div>
+            <label style={{ display: "block", fontSize: 13, color: "#aaa", marginBottom: 6 }}>Group Name</label>
+            <input
+              type="text"
+              placeholder="Enter group name"
+              value={groupCreationName}
+              onChange={(e) => setGroupCreationName(e.target.value)}
+              style={{ width: "100%", padding: "10px 12px", background: "#1a2332", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, color: "#fff", fontSize: 14, boxSizing: "border-box" }}
+            />
+          </div>
+
+          <div>
+            <label style={{ display: "block", fontSize: 13, color: "#aaa", marginBottom: 6 }}>Link to Department (Optional)</label>
+            <select
+              value={groupCreationDepartment}
+              onChange={(e) => handleDepartmentSelect(e.target.value)}
+              style={{ width: "100%", padding: "10px 12px", background: "#1a2332", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, color: "#fff", fontSize: 14, boxSizing: "border-box" }}
+            >
+              <option value="">None (Custom Group)</option>
+              {_chatDepartments.map((dept) => (
+                <option key={dept} value={dept}>{dept}</option>
+              ))}
+            </select>
+            {groupCreationDepartment && (
+              <p style={{ margin: "6px 0 0 0", fontSize: 11, color: "#38ef7d" }}>
+                ✓ Members of {groupCreationDepartment} will be added automatically.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label style={{ display: "block", fontSize: 13, color: "#aaa", marginBottom: 8 }}>
+              Select Group Members ({groupCreationMembers.length} selected)
+            </label>
+            <div style={{ background: "#121a26", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, maxHeight: 180, overflowY: "auto", padding: 8 }}>
+              {chatTargets.filter(u => (u._id || u.id) !== currentUser?.id).map((u) => {
+                const uId = u._id || u.id;
+                const isSelected = groupCreationMembers.includes(uId);
+                return (
+                  <div
+                    key={uId}
+                    onClick={() => toggleMemberSelection(uId)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "8px",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                      marginBottom: 4,
+                      background: isSelected ? "rgba(0, 198, 255, 0.08)" : "transparent",
+                      border: isSelected ? "1px solid rgba(0, 198, 255, 0.2)" : "1px solid transparent",
+                      transition: "all 0.2s"
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => {}} // toggling handled by parent div click
+                      style={{ cursor: "pointer" }}
+                    />
+                    <div style={{ width: 26, height: 26, borderRadius: "50%", background: "rgba(59,130,246,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: "bold", color: "#00c6ff" }}>
+                      {(u.name || "?")[0].toUpperCase()}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{u.name}</div>
+                      <div style={{ fontSize: 10, color: "#888", display: "flex", gap: 4 }}>
+                        <span style={{ textTransform: "capitalize" }}>{u.role}</span>
+                        {u.department && <span>· {u.department}</span>}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 20 }}>
+          <button onClick={() => { setGroupCreationName(""); setGroupCreationDepartment(""); setGroupCreationMembers([]); setGroupCreationModalOpen(false); }} style={{ padding: "10px 20px", borderRadius: 8, background: "transparent", border: "1px solid rgba(255,255,255,0.2)", color: "#fff", cursor: "pointer" }}>Cancel</button>
+          <button onClick={handleCreateGroup} style={{ padding: "10px 20px", borderRadius: 8, background: "linear-gradient(to right,#00c6ff,#0072ff)", border: "none", color: "#fff", fontWeight: "bold", cursor: "pointer" }}>Create</button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  const DirectMessageModal = () => directMessageModalOpen ? (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
+      <div style={{ background: "#0b1220", padding: 28, borderRadius: 16, width: 440, maxHeight: "80vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.6)", color: "#fff", border: "1px solid rgba(255,255,255,0.1)" }}>
+        <h3 style={{ marginBottom: 16, fontSize: 18, fontWeight: 600 }}>Start Private Chat</h3>
+        <div style={{ flex: 1, overflowY: "auto", marginBottom: 20, paddingRight: 4 }}>
+          {getEligibleDirectMessageUsers().length === 0 ? (
+            <div style={{ padding: 20, color: "#888", textAlign: "center" }}>No eligible chat partners found.</div>
+          ) : (
+            getEligibleDirectMessageUsers().map((u) => (
+              <div
+                key={u._id || u.id}
+                onClick={async () => {
+                  try {
+                    const response = await fetch(`${API_URL}/chat/conversation/${u._id || u.id}`, {
+                      headers: { Authorization: `Bearer ${token}` }
+                    });
+                    if (response.ok) {
+                      const conv = await response.json();
+                      openConversation(conv);
+                      setDirectMessageModalOpen(false);
+                      // Add to local list of conversations if not already there
+                      setChatConversations(prev => {
+                        if (prev.some(c => c.conversationId === conv.conversationId)) return prev;
+                        return [conv, ...prev];
+                      });
+                    } else {
+                      const errData = await response.json();
+                      showToast(errData.message || "Failed to start conversation", "error");
+                    }
+                  } catch (err) {
+                    console.error(err);
+                    showToast("Failed to start conversation", "error");
+                  }
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  cursor: "pointer",
+                  borderBottom: "1px solid rgba(255,255,255,0.04)",
+                  transition: "background 0.2s"
+                }}
+                onMouseOver={(e) => (e.currentTarget.style.background = "rgba(0,198,255,0.1)")}
+                onMouseOut={(e) => (e.currentTarget.style.background = "transparent")}
+              >
+                <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(59,130,246,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: "bold", color: "#00c6ff" }}>
+                  {u.profilePicture ? (
+                    <img src={u.profilePicture} alt={u.name} style={{ width: "100%", height: "100%", borderRadius: "50%", objectFit: "cover" }} />
+                  ) : (
+                    (u.name || "?")[0].toUpperCase()
+                  )}
+                </div>
+                <div style={{ flex: 1, textAlign: "left" }}>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>{u.name}</div>
+                  <div style={{ fontSize: 11, color: "#888" }}>
+                    {u.role.toUpperCase()} {u.designation ? `· ${u.designation}` : ""} {u.department ? `· ${u.department}` : ""}
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <button onClick={() => setDirectMessageModalOpen(false)} style={{ padding: "10px 20px", borderRadius: 8, background: "transparent", border: "1px solid rgba(255,255,255,0.2)", color: "#fff", cursor: "pointer" }}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   // ─────────────────────────────────────────────────────────────────────────
   // LOGIN / REGISTER PAGE
   // ─────────────────────────────────────────────────────────────────────────
   if (!token) {
     return (
       <div className="auth-container">
-        <Toast /><Modal />
+        <Toast /><Modal /><GroupCreationModal /><DirectMessageModal />
         <div className="auth-card">
           {mfaRequired ? (
             <div>
@@ -1127,6 +1802,23 @@ function App() {
                         <option value="">Select Role</option>
                         {publicRoles.map((r: any) => <option key={r._id} value={r.name}>{r.displayName || r.name}</option>)}
                       </select>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        <label style={{ color: "#ccc", fontSize: 13 }}>Profile Picture</label>
+                        <input type="file" accept="image/*" onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          const MAX = 10 * 1024 * 1024;
+                          if (file.size > MAX) {
+                            showToast("File size exceeds 10MB limit. Please choose a smaller file.", "error");
+                            e.target.value = "";
+                            return;
+                          }
+                          const reader = new FileReader();
+                          reader.onloadend = () => setRegisterData({ ...registerData, profilePicture: reader.result as string });
+                          reader.readAsDataURL(file);
+                        }} style={{ ...styles.input, padding: "10px 12px", height: "auto" }} />
+                        {registerData.profilePicture && <img src={registerData.profilePicture} alt="preview" style={{ width: 80, height: 80, borderRadius: 12, objectFit: "cover", border: "1px solid rgba(255,255,255,0.12)" }} />}
+                      </div>
                     </>
                   )}
                   <input type="email" placeholder="Email" value={isLogin ? loginData.email : registerData.email} onChange={(e) => isLogin ? setLoginData({ ...loginData, email: e.target.value }) : setRegisterData({ ...registerData, email: e.target.value })} style={styles.input} />
@@ -1311,6 +2003,10 @@ function App() {
           <div>
             <label style={styles.label}>Designation</label>
             <input type="text" value={profileDesignation} onChange={(e) => setProfileDesignation(e.target.value)} style={styles.input} placeholder="e.g. Senior Developer" />
+          </div>
+          <div>
+            <label style={styles.label}>Department</label>
+            <input type="text" value={profileDepartment} onChange={(e) => setProfileDepartment(e.target.value)} style={styles.input} placeholder="e.g. Engineering" />
           </div>
           <div>
             <label style={styles.label}>Role</label>
@@ -1505,6 +2201,7 @@ function App() {
     admin: "Admin Panel",
     manager: "Manager Panel",
     cto: "CTO Panel",
+    chat: "Team Chat",
     settings: "Settings",
     "add-task": editingTaskId ? "Edit Task" : "Add New Task",
     profile: "Edit Profile",
@@ -1512,7 +2209,7 @@ function App() {
 
   return (
     <div className="app-dashboard">
-      <Toast /><Modal />
+      <Toast /><Modal /><GroupCreationModal /><DirectMessageModal />
 
       {/* HEADER */}
       <div className="app-header">
@@ -1551,6 +2248,9 @@ function App() {
                   <span style={{ display: "flex", alignItems: "center", gap: 6 }}><IconBriefcase size={15} /> CTO</span>
                 </button>
               )}
+              <button style={currentPage === "chat" ? styles.activeTab : styles.adminTab} onClick={() => setCurrentPage("chat")}>
+                <span style={{ display: "flex", alignItems: "center", gap: 6 }}><IconMessageCircle size={15} /> Chat</span>
+              </button>
             </>
           )}
           <button style={currentPage === "settings" ? styles.activeTab : styles.adminTab} onClick={() => setCurrentPage("settings")}>
@@ -1568,6 +2268,141 @@ function App() {
         {/* ── Settings Page ── */}
         {currentPage === "settings" && <SettingsPage />}
 
+        {/* ── Chat Page (WhatsApp Style) ── */}
+        {currentPage === "chat" && (
+          <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 0, height: "calc(100vh - 140px)", background: "#0a0e27", borderRadius: 16, overflow: "hidden", border: "1px solid rgba(255,255,255,0.08)" }}>
+            {/* Sidebar */}
+            <div style={{ display: "flex", flexDirection: "column", background: "#0f1620", borderRight: "1px solid rgba(255,255,255,0.08)", overflow: "hidden" }}>
+              <div style={{ padding: 16, borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+                <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                  <input placeholder="Search chats..." style={{ ...styles.input, flex: 1, padding: "8px 12px", fontSize: 13, height: "auto" }} />
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    style={{ flex: 1, padding: "9px 10px", background: "linear-gradient(to right,#667eea,#764ba2)", color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, cursor: "pointer", fontSize: 12 }}
+                    onClick={() => setDirectMessageModalOpen(true)}
+                  >+ Direct Message</button>
+                  <button
+                    style={{ flex: 1, padding: "9px 10px", background: "linear-gradient(to right,#00c6ff,#0072ff)", color: "#000", border: "none", borderRadius: 8, fontWeight: 600, cursor: "pointer", fontSize: 12 }}
+                    onClick={() => { setGroupCreationName(""); setGroupCreationDepartment(""); setGroupCreationMembers([]); setGroupCreationModalOpen(true); }}
+                  >+ New Group</button>
+                </div>
+              </div>
+              <div style={{ flex: 1, overflow: "auto" }}>
+                {!chatConversations || chatConversations.length === 0 ? (
+                  <div style={{ padding: 16, color: "#888", textAlign: "center" }}>No conversations yet</div>
+                ) : (
+                  chatConversations.map((conv: any) => (
+                    <div key={conv.conversationId} onClick={() => openConversation(conv)} style={{ padding: "12px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", cursor: "pointer", background: selectedConversation?.conversationId === conv.conversationId ? "rgba(0,198,255,0.1)" : "transparent", transition: "background 0.2s" }} onMouseOver={(e) => (e.currentTarget.style.background = selectedConversation?.conversationId === conv.conversationId ? "rgba(0,198,255,0.1)" : "rgba(255,255,255,0.03)")} onMouseOut={(e) => (e.currentTarget.style.background = selectedConversation?.conversationId === conv.conversationId ? "rgba(0,198,255,0.1)" : "transparent")}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{ width: 40, height: 40, borderRadius: "50%", background: conv.type === "group" ? "rgba(0,198,255,0.2)" : "rgba(59,130,246,0.2)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                          <span style={{ fontSize: 18 }}>{conv.type === "group" ? "👥" : "💬"}</span>
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: 14, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{conv.name}</div>
+                          <div style={{ fontSize: 12, color: "#888", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{conv.lastMessage || "No messages"}</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Main Chat Area */}
+            <div style={{ display: "flex", flexDirection: "column", background: "#0a0e27" }}>
+              {selectedConversation ? (
+                <>
+                  {/* Chat Header */}
+                  <div style={{ padding: "16px 24px", borderBottom: "1px solid rgba(255,255,255,0.08)", background: "#0f1620", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <h3 style={{ margin: 0, color: "#fff", fontSize: 16, fontWeight: 600 }}>{selectedConversation.name}</h3>
+                      <p style={{ margin: "4px 0 0 0", color: "#888", fontSize: 12 }}>
+                        {selectedConversation.type === "group" ? `${selectedConversation.memberCount} members` : `@${selectedConversation.role}`}
+                      </p>
+                    </div>
+                    <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+                      {isAdmin && selectedConversation.type === "group" && (
+                        <button
+                          onClick={() => handleDeleteGroup(selectedConversation.groupId)}
+                          style={{
+                            background: "rgba(239, 68, 68, 0.15)",
+                            border: "1px solid rgba(239, 68, 68, 0.4)",
+                            color: "#f87171",
+                            padding: "6px 12px",
+                            borderRadius: "8px",
+                            cursor: "pointer",
+                            fontSize: "12px",
+                            fontWeight: 600,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            transition: "all 0.2s"
+                          }}
+                          onMouseOver={(e) => {
+                            e.currentTarget.style.background = "rgba(239, 68, 68, 0.25)";
+                            e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.6)";
+                          }}
+                          onMouseOut={(e) => {
+                            e.currentTarget.style.background = "rgba(239, 68, 68, 0.15)";
+                            e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.4)";
+                          }}
+                        >
+                          <IconTrash size={14} />
+                          <span>Delete Group</span>
+                        </button>
+                      )}
+                      <div style={{ color: chatConnected ? "#34d399" : "#f59e0b", fontSize: 12, fontWeight: 600 }}>
+                        {chatConnected ? "● Connected" : "● Disconnected"}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Messages Area */}
+                  <div style={{ flex: 1, overflow: "auto", padding: "20px 24px", display: "flex", flexDirection: "column", gap: 12 }}>
+                    {loadingChatHistory ? (
+                      <div style={{ color: "#888", textAlign: "center", padding: 20 }}>Loading messages...</div>
+                    ) : chatMessages.length === 0 ? (
+                      <div style={{ color: "#888", textAlign: "center", padding: 40 }}>No messages yet. Start the conversation!</div>
+                    ) : (
+                      chatMessages.map((message: any, index: number) => {
+                        const isOwnMessage = message.self || message.from?.id === currentUser?.id;
+                        const senderName = isOwnMessage ? "You" : message.from?.name || "Unknown";
+                        return (
+                          <div key={index} style={{ display: "flex", flexDirection: isOwnMessage ? "row-reverse" : "row", gap: 10, alignItems: "flex-end" }}>
+                            <div style={{ maxWidth: "60%", background: isOwnMessage ? "rgba(0,198,255,0.2)" : "rgba(255,255,255,0.08)", padding: "10px 14px", borderRadius: "12px", border: "1px solid rgba(255,255,255,0.08)" }}>
+                              {selectedConversation.type === "group" && !isOwnMessage && (
+                                <div style={{ fontSize: 11, color: "#00c6ff", marginBottom: 4, fontWeight: 600 }}>{senderName}</div>
+                              )}
+                              <div style={{ color: "#fff", fontSize: 14 }}>{message.message}</div>
+                              <div style={{ fontSize: 11, color: "#888", marginTop: 4, textAlign: "right" }}>
+                                {message.timestamp ? new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                    <div style={{ height: 0 }} />
+                  </div>
+
+                  {/* Message Input */}
+                  <div style={{ padding: "16px 24px", borderTop: "1px solid rgba(255,255,255,0.08)", background: "#0f1620", display: "flex", gap: 10 }}>
+                    <input value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyPress={(e) => e.key === "Enter" && sendChatMessage()} placeholder="Type a message..." style={{ ...styles.input, flex: 1, padding: "10px 14px", fontSize: 14, height: "auto" }} />
+                    <button style={{ ...styles.button, width: "auto", padding: "10px 20px", fontSize: 13, fontWeight: 600 }} onClick={sendChatMessage}>Send</button>
+                  </div>
+                </>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "#888" }}>
+                  <div style={{ fontSize: 48, marginBottom: 16 }}>💬</div>
+                  <p style={{ fontSize: 16, fontWeight: 600, margin: "0 0 8px 0", color: "#ccc" }}>Select a conversation</p>
+                  <p style={{ fontSize: 13, margin: 0, color: "#666" }}>Choose a chat from the list or create a new group</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* ── Add Task Page ── */}
         {currentPage === "add-task" && <AddTaskPage />}
 
@@ -1581,28 +2416,46 @@ function App() {
                 <button style={adminTab === "users" ? styles.activeTab : styles.adminTab} onClick={() => setAdminTab("users")}><IconUsers size={16} /> Users</button>
                 <button style={adminTab === "pending" ? styles.activeTab : styles.adminTab} onClick={() => setAdminTab("pending")}><IconClock size={16} /> Pending ({pendingRequests.length})</button>
                 <button style={adminTab === "roles" ? styles.activeTab : styles.adminTab} onClick={() => setAdminTab("roles")}><IconShield size={16} /> Role Permissions</button>
+                <button style={adminTab === "chat" ? styles.activeTab : styles.adminTab} onClick={() => setAdminTab("chat")}><IconMessageCircle size={16} /> Chat Settings</button>
                 <button style={adminTab === "tasks" ? styles.activeTab : styles.adminTab} onClick={() => setAdminTab("tasks")}><IconClipboard size={16} /> All Tasks</button>
             </div>
             {adminTab === "users" && (
               <div style={styles.adminSection}>
-                {editingUserId && (
-                  <div style={{ marginBottom: 24, padding: 20, borderRadius: 16, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(0,198,255,0.3)" }}>
-                    <h3 style={{ marginBottom: 12, color: "#00c6ff" }}>Edit User</h3>
-                    <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))" }}>
-                    <h3 style={{ marginBottom: 12 }}>Create New User</h3>
-                    <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 1fr" }}>
-                      <input placeholder="Name" value={newUserData.name} onChange={(e) => setNewUserData({ ...newUserData, name: e.target.value })} style={styles.input} />
-                      <input placeholder="Email" value={newUserData.email} onChange={(e) => setNewUserData({ ...newUserData, email: e.target.value })} style={styles.input} />
-                      <input type="password" placeholder="Password" value={newUserData.password} onChange={(e) => setNewUserData({ ...newUserData, password: e.target.value })} style={styles.input} />
-                      <input placeholder="Designation" value={newUserData.designation} onChange={(e) => setNewUserData({ ...newUserData, designation: e.target.value })} style={styles.input} />
-                      <select value={newUserData.role} onChange={(e) => setNewUserData({ ...newUserData, role: e.target.value })} style={styles.input}>
-                        {(roles.length > 0 ? roles : [{ name: "user" }, { name: "manager" }, { name: "cto" }, { name: "admin" }]).map((role: any) => <option key={role.name} value={role.name}>{role.name}</option>)}
-                      </select>
+                <div style={{ marginBottom: 28, padding: 24, borderRadius: 12, background: "linear-gradient(135deg, rgba(30, 58, 95, 0.4) 0%, rgba(0, 198, 255, 0.05) 100%)", border: "1px solid rgba(0, 198, 255, 0.2)", boxShadow: "0 4px 12px rgba(0, 0, 0, 0.15)" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+                    <div>
+                      <h3 style={{ margin: "0 0 4px 0", color: "#ffffff", fontSize: 18, fontWeight: 600 }}>{editingUserId ? "✏️ Edit User" : "➕ Create New User"}</h3>
+                      <p style={{ margin: 0, color: "#888", fontSize: 13 }}>{editingUserId ? "Update user information" : "Add a new team member"}</p>
                     </div>
-                    <button style={{ ...styles.button, marginTop: 12 }} onClick={createAdminUser}>Create User</button>
+                  </div>
+                  <div style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
+                    <input placeholder="Full Name" value={newUserData.name} onChange={(e) => setNewUserData({ ...newUserData, name: e.target.value })} style={{ ...styles.input, fontSize: 14 }} />
+                    <input placeholder="Email Address" value={newUserData.email} onChange={(e) => setNewUserData({ ...newUserData, email: e.target.value })} style={{ ...styles.input, fontSize: 14 }} />
+                    <input type="password" placeholder="Password" value={newUserData.password} onChange={(e) => setNewUserData({ ...newUserData, password: e.target.value })} style={{ ...styles.input, fontSize: 14 }} />
+                            <input placeholder="Job Title / Designation" value={newUserData.designation} onChange={(e) => setNewUserData({ ...newUserData, designation: e.target.value })} style={{ ...styles.input, fontSize: 14 }} />
+                            <input placeholder="Department" value={newUserData.department} onChange={(e) => setNewUserData({ ...newUserData, department: e.target.value })} style={{ ...styles.input, fontSize: 14 }} />
+                    <select value={newUserData.role} onChange={(e) => setNewUserData({ ...newUserData, role: e.target.value })} style={{ ...styles.input, fontSize: 14 }}>
+                      <option value="">-- Select Role --</option>
+                      {(roles.length > 0 ? roles : [{ name: "user" }, { name: "manager" }, { name: "cto" }, { name: "admin" }]).map((role: any) => <option key={role.name} value={role.name}>{role.name.charAt(0).toUpperCase() + role.name.slice(1)}</option>)}
+                    </select>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8, gridColumn: "span 1" }}>
+                      <label style={{ color: "#888", fontSize: 12, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.5px" }}>📷 Profile Picture</label>
+                      <input type="file" accept="image/*" onChange={handleNewUserPhotoUpload} style={{ ...styles.input, padding: "8px 12px", height: "auto", fontSize: 13 }} />
+                    </div>
+                  </div>
+                  {newUserData.profilePicture && (
+                    <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid rgba(0, 198, 255, 0.1)" }}>
+                      <p style={{ margin: "0 0 8px 0", color: "#888", fontSize: 12, fontWeight: 500 }}>Preview</p>
+                      <img src={newUserData.profilePicture} alt="preview" style={{ width: 70, height: 70, borderRadius: 8, objectFit: "cover", border: "2px solid rgba(0, 198, 255, 0.3)" }} />
+                    </div>
+                  )}
+                  <div style={{ marginTop: 18, display: "flex", gap: 10 }}>
+                    <button style={{ padding: "9px 20px", borderRadius: 6, background: "linear-gradient(135deg, #00c6ff 0%, #0099cc 100%)", color: "#000", border: "none", fontSize: 13, fontWeight: 600, cursor: "pointer", boxShadow: "0 2px 8px rgba(0, 198, 255, 0.3)", transition: "all 0.3s" }} onMouseOver={(e) => (e.currentTarget.style.boxShadow = "0 4px 12px rgba(0, 198, 255, 0.5)")} onMouseOut={(e) => (e.currentTarget.style.boxShadow = "0 2px 8px rgba(0, 198, 255, 0.3)")} onClick={editingUserId ? saveAdminUser : createAdminUser}>{editingUserId ? "💾 Save" : "✓ Create"}</button>
+                    {editingUserId && (
+                      <button style={{ padding: "9px 20px", borderRadius: 6, background: "rgba(255, 255, 255, 0.1)", color: "#ccc", border: "1px solid rgba(255, 255, 255, 0.2)", fontSize: 13, fontWeight: 600, cursor: "pointer", transition: "all 0.3s" }} onMouseOver={(e) => { e.currentTarget.style.background = "rgba(255, 255, 255, 0.15)"; }} onMouseOut={(e) => { e.currentTarget.style.background = "rgba(255, 255, 255, 0.1)"; }} onClick={() => { setEditingUserId(null); setNewUserData({ name: "", email: "", password: "", role: "user", designation: "", department: "", profilePicture: "" }); }}>✕ Cancel</button>
+                    )}
                   </div>
                 </div>
-              )}
                 <div style={styles.adminGrid}>
                   {adminUsers.length === 0 ? <div>No users found.</div> : adminUsers.map((user) => (
                     <div key={user._id || user.email} style={styles.adminCard}>
@@ -1678,6 +2531,36 @@ function App() {
             )}
 
             {/* Pending Tab */}
+            {adminTab === "chat" && (
+              <div style={styles.adminSection}>
+                <h2>Chat Settings</h2>
+                <div style={{ display: "grid", gap: 16, marginBottom: 24, background: "rgba(255,255,255,0.04)", padding: 24, borderRadius: 16, border: "1px solid rgba(255,255,255,0.08)" }}>
+                  <p style={{ color: "#ccc", margin: 0 }}>Control which roles can message each other and whether department chat and bot chat are enabled.</p>
+                  <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 15, cursor: "pointer" }}>
+                    <input type="checkbox" checked={chatConfig?.usersCanChatWithManagers} onChange={(e) => setChatConfig((prev: any) => ({ ...prev, usersCanChatWithManagers: e.target.checked }))} />
+                    <span>Allow users to chat with managers</span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 15, cursor: "pointer" }}>
+                    <input type="checkbox" checked={chatConfig?.usersCanChatWithCtos} onChange={(e) => setChatConfig((prev: any) => ({ ...prev, usersCanChatWithCtos: e.target.checked }))} />
+                    <span>Allow users to chat with CTOs</span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 15, cursor: "pointer" }}>
+                    <input type="checkbox" checked={chatConfig?.usersCanChatWithCfos} onChange={(e) => setChatConfig((prev: any) => ({ ...prev, usersCanChatWithCfos: e.target.checked }))} />
+                    <span>Allow users to chat with CFOs</span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 15, cursor: "pointer" }}>
+                    <input type="checkbox" checked={chatConfig?.managersCanChatWithCtos} onChange={(e) => setChatConfig((prev: any) => ({ ...prev, managersCanChatWithCtos: e.target.checked }))} />
+                    <span>Allow managers to chat with CTOs</span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 15, cursor: "pointer" }}>
+                    <input type="checkbox" checked={chatConfig?.departmentChatEnabled} onChange={(e) => setChatConfig((prev: any) => ({ ...prev, departmentChatEnabled: e.target.checked }))} />
+                    <span>Enable department chat and department bot</span>
+                  </label>
+                </div>
+                <button style={{ ...styles.button, width: "auto", padding: "12px 24px" }} onClick={() => updateAdminChatConfig({ usersCanChatWithManagers: chatConfig?.usersCanChatWithManagers, usersCanChatWithCtos: chatConfig?.usersCanChatWithCtos, usersCanChatWithCfos: chatConfig?.usersCanChatWithCfos, managersCanChatWithCtos: chatConfig?.managersCanChatWithCtos, departmentChatEnabled: chatConfig?.departmentChatEnabled })}>Save Chat Settings</button>
+              </div>
+            )}
+
             {adminTab === "pending" && (
               <div style={styles.adminSection}>
                 <h2>Pending Requests</h2>

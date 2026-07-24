@@ -56,9 +56,8 @@ exports.loginUser = async (req, res) => {
             return res.status(400).json({ message: "User not found" });
         }
 
-        if (!user.approved) {
-            return res.status(403).json({ message: "Account pending admin approval" });
-        }
+// Approval check removed; any user can attempt login
+
 
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {

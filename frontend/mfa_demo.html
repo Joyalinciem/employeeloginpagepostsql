@@ -27,7 +27,7 @@
     <div class="msg" id="msg"></div>
   </div>
   <script>
-    const api = 'http://localhost:5000';
+    const api = window.location.origin;
     let pendingEmail = '';
     async function login(){
       const email=document.getElementById('email').value;
