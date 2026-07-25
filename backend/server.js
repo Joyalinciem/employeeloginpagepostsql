@@ -440,7 +440,7 @@ const createQuery = (table, filter = {}) => {
       skip: state.skip,
     });
 
-    let result = rows;
+    let result = rows.map((r) => attachInstanceHelpers(table, r));
     for (const pop of state.populate) {
       result = await populateResults(result, pop.field, pop.select);
     }
