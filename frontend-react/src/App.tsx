@@ -1037,15 +1037,18 @@ function App() {
       else setCurrentPage("tasks");
       return data;
     }
-    if (response.status === 401) {
+    if (!response.ok) {
       localStorage.removeItem("token");
       setToken("");
       setCurrentUser(null);
       setIsAdmin(false);
-      setCurrentPage("tasks");
-      setLoginMessage("Session expired. Please log in again.");
+      setIsManager(false);
+      setIsCto(false);
+      if (response.status === 401) {
+        setLoginMessage("Session expired. Please log in again.");
+      }
+      return null;
     }
-    return null;
   };
 
   const handleSaveProfile = async () => {
