@@ -231,19 +231,24 @@ const initChatSocket = require('./sockets/chatSocket');
 initChatSocket(wss);
 app.use(cors());
 const frontendPath = path.resolve(__dirname, 'frontend');
-console.log('🔧 Frontend path resolved to:', frontendPath);
+const reactDistPath = path.resolve(__dirname, '../frontend-react/dist');
+console.log('🔧 Legacy Frontend path:', frontendPath);
+console.log('🔧 React Dist path:', reactDistPath);
+
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 app.use(logMiddleware);
 app.use("/api", rateLimitMiddleware);
 app.use('/api/chat', require('./routes/chatRoutes'));
-// MongoDB connection will be initialized after seedRoles() is defined.
-// Serve static employee-facing frontend files
+
+// Serve static frontend files (React dist first, then legacy HTML)
+if (fs.existsSync(reactDistPath)) {
+  console.log('✨ Serving React UI from:', reactDistPath);
+  app.use(express.static(reactDistPath));
+}
 app.use(express.static(frontendPath));
 app.use('/api/auth', require('./routes/authRoutes'));
-app.get('/', (req, res) => {
-  res.sendFile(path.join(frontendPath, 'login.html'));
-});
+
 app.get('/mfa_demo.html', (req, res) => {
   res.sendFile(path.join(frontendPath, 'mfa_demo.html'));
 });
@@ -3558,6 +3563,17 @@ app.get('/api/chat/conversation/:userId', authMiddleware, async (req, res) => {
     console.error(error);
     res.status(500).json({ message: 'Failed to get conversation' });
   }
+});
+
+// SPA Fallback Route for React App
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api')) return next();
+  const reactDistPath = path.resolve(__dirname, '../frontend-react/dist');
+  if (fs.existsSync(path.join(reactDistPath, 'index.html'))) {
+    return res.sendFile(path.join(reactDistPath, 'index.html'));
+  }
+  const legacyFrontendPath = path.resolve(__dirname, 'frontend');
+  res.sendFile(path.join(legacyFrontendPath, 'login.html'));
 });
 
 const startServer = async () => {

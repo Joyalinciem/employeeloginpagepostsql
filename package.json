@@ -2,6 +2,7 @@
   "name": "mongodb",
   "version": "1.0.0",
   "scripts": {
+    "build": "cd frontend-react && npm install && npm run build",
     "start": "node backend/server.js",
     "dev": "nodemon backend/server.js",
     "seed": "node scripts/seed_roles.js"
