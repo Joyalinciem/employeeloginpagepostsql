@@ -46,7 +46,7 @@ const userSchema = new mongoose.Schema({
   // 'email' | 'totp' (Google Authenticator)
   mfaMethod: {
     type: String,
-    enum: ["email", "totp", null],
+    enum: ["email", "totp", "none", null],
     default: null,
   },
   mfaSecret: String,

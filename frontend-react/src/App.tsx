@@ -303,7 +303,7 @@ function StatCard({ label, value, color, icon }: { label: string; value: number;
 }
 
 function App() {
-  const API_URL = `http://${window.location.hostname}:5000/api`;
+  const API_URL = `/api`;
 
   // ── AUTH STATES ──────────────────────────────────────────────────────────
   const [isLogin, setIsLogin] = useState(true);
@@ -469,7 +469,8 @@ function App() {
     if (chatWs && chatWs.readyState === WebSocket.OPEN) return chatWs;
     if (!token) return null;
 
-    const wsUrl = `ws://${window.location.hostname}:5000/chat?token=${token}`;
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const wsUrl = `${wsProtocol}://${window.location.host}/chat?token=${token}`;
     const ws = new WebSocket(wsUrl);
     ws.addEventListener("open", () => {
       console.log("Chat connected");
@@ -946,7 +947,10 @@ function App() {
         setOtpMessage(data.message || "OTP sent to your email. Valid for 15 minutes.");
         setShowOtpBlock(true);
         if (data.mockOtp) {
-          showToast(`Mock Email OTP: ${data.mockOtp}`, "info");
+          showToast(`OTP Code: ${data.mockOtp}`, "info");
+        }
+        if (data.previewUrl) {
+          console.log("📧 Ethereal Email Preview URL:", data.previewUrl);
         }
       } else {
         const errMsg = data.message || "Failed to send OTP.";

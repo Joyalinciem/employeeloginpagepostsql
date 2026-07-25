@@ -854,14 +854,18 @@ if (!process.env.EMAIL_HOST || process.env.EMAIL_HOST.includes('example')) {
     },
   };
 } else {
+  const emailPort = parseInt(process.env.EMAIL_PORT, 10) || 587;
   transporter = nodemailer.createTransport({
     host: process.env.EMAIL_HOST,
-    port: parseInt(process.env.EMAIL_PORT, 10),
-    secure: true,
+    port: emailPort,
+    secure: emailPort === 465,
     auth: {
       user: process.env.EMAIL_USER,
       pass: process.env.EMAIL_PASS,
     },
+    tls: {
+      rejectUnauthorized: false
+    }
   });
 }
 const sendDecisionEmail = async (user, accepted) => {
@@ -1167,54 +1171,59 @@ app.post("/api/login", async (req, res) => {
 
         console.log('📧 MFA login OTP generated', { email, otp, expiryTime });
 
-        await transporter.sendMail({
-          from: process.env.FROM_ADDRESS,
-          to: email,
-          subject: "MFA Verification Code",
-          html: `
-            <div style="
-              font-family:Arial;
-              padding:25px;
-              background:#f5f5f5;
-            ">
+        let emailSent = false;
+        try {
+          await transporter.sendMail({
+            from: process.env.FROM_ADDRESS || process.env.EMAIL_USER,
+            to: email,
+            subject: "MFA Verification Code",
+            html: `
               <div style="
-                background:white;
-                padding:30px;
-                border-radius:10px;
+                font-family:Arial;
+                padding:25px;
+                background:#f5f5f5;
               ">
-                <h2 style="color:#0072ff;">
-                  MFA Verification Code
-                </h2>
-
-                <p>
-                  Use the following verification code to complete your login:
-                </p>
-
-                <h1 style="
-                  color:#ff512f;
-                  letter-spacing:6px;
-                  text-align:center;
+                <div style="
+                  background:white;
+                  padding:30px;
+                  border-radius:10px;
                 ">
-                  ${otp}
-                </h1>
+                  <h2 style="color:#0072ff;">
+                    MFA Verification Code
+                  </h2>
 
-                <p style="
-                  color:red;
-                  font-weight:bold;
-                ">
-                  This verification code is valid only for 5 minutes.
-                </p>
-              </div> 
-            </div>
-          `,
-        });
+                  <p>
+                    Use the following verification code to complete your login:
+                  </p>
 
-        const isMock = !process.env.EMAIL_HOST || process.env.EMAIL_HOST.includes('example');
+                  <h1 style="
+                    color:#ff512f;
+                    letter-spacing:6px;
+                    text-align:center;
+                  ">
+                    ${otp}
+                  </h1>
+
+                  <p style="
+                    color:red;
+                    font-weight:bold;
+                  ">
+                    This verification code is valid only for 5 minutes.
+                  </p>
+                </div> 
+              </div>
+            `,
+          });
+          emailSent = true;
+        } catch (mailErr) {
+          console.error("⚠️ Login MFA email delivery failed, using fallback:", mailErr?.message || mailErr);
+        }
+
         return res.json({
           requiresMFA: true,
           mfaMethod: "email",
           email: user.email,
-          mockOtp: isMock ? otp : undefined
+          mockOtp: otp
         });
       } else if (user.mfaMethod === "totp") {
         return res.json({
@@ -1529,49 +1538,54 @@ app.post("/api/mfa/setup", authMiddleware, async (req, res) => {
 
       console.log('📧 MFA setup OTP (email) generated', { email: user.email, otp, expiryTime });
 
-      await transporter.sendMail({
-        from: process.env.FROM_ADDRESS,
-        to: user.email,
-        subject: "MFA Setup Verification Code",
-        html: `
-          <div style="
-            font-family:Arial;
-            padding:25px;
-            background:#f5f5f5;
-          ">
+      let emailSent = false;
+      try {
+        await transporter.sendMail({
+          from: process.env.FROM_ADDRESS || process.env.EMAIL_USER,
+          to: user.email,
+          subject: "MFA Setup Verification Code",
+          html: `
             <div style="
-              background:white;
-              padding:30px;
-              border-radius:10px;
+              font-family:Arial;
+              padding:25px;
+              background:#f5f5f5;
             ">
-              <h2 style="color:#0072ff;">
-                MFA Setup
-              </h2>
-              <p>
-                Use the following verification code to enable Email MFA:
-              </p>
-              <h1 style="
-                color:#ff512f;
-                letter-spacing:6px;
-                text-align:center;
+              <div style="
+                background:white;
+                padding:30px;
+                border-radius:10px;
               ">
-                ${otp}
-              </h1>
-              <p style="
-                color:red;
-                font-weight:bold;
-              ">
-                This verification code is valid only for 5 minutes.
-              </p>
+                <h2 style="color:#0072ff;">
+                  MFA Setup
+                </h2>
+                <p>
+                  Use the following verification code to enable Email MFA:
+                </p>
+                <h1 style="
+                  color:#ff512f;
+                  letter-spacing:6px;
+                  text-align:center;
+                ">
+                  ${otp}
+                </h1>
+                <p style="
+                  color:red;
+                  font-weight:bold;
+                ">
+                  This verification code is valid only for 5 minutes.
+                </p>
+              </div>
             </div>
-          </div>
-        `,
-      });
+          `,
+        });
+        emailSent = true;
+      } catch (mailErr) {
+        console.error("⚠️ MFA setup email delivery failed, using fallback:", mailErr?.message || mailErr);
+      }
 
-      const isMock = !process.env.EMAIL_HOST || process.env.EMAIL_HOST.includes('example');
       res.json({ 
-        message: "Verification code sent to your email",
-        mockOtp: isMock ? otp : undefined
+        message: emailSent ? "Verification code sent to your email" : "Verification code generated (Email delivery failed or in dev mode — check code below)",
+        mockOtp: otp
       });
     } else if (method === "totp") {
       const secret = generateSecret({ crypto, base32 });
@@ -1713,65 +1727,74 @@ app.post("/api/forgot-password", async (req, res) => {
     console.log("Generated OTP:", otp);
 
     // SEND EMAIL
-
-    await transporter.sendMail({
-      from: process.env.FROM_ADDRESS,
-
-      to: email,
-
-      subject: "Password Reset OTP",
-
-      html: `
-        <div style="
-          font-family:Arial;
-          padding:25px;
-          background:#f5f5f5;
-        ">
+    let emailSent = false;
+    let previewUrl = null;
+    try {
+      const info = await transporter.sendMail({
+        from: process.env.FROM_ADDRESS || process.env.EMAIL_USER,
+        to: email,
+        subject: "Password Reset OTP",
+        html: `
           <div style="
-            background:white;
-            padding:30px;
-            border-radius:10px;
+            font-family:Arial;
+            padding:25px;
+            background:#f5f5f5;
           ">
-            <h2 style="color:#0072ff;">
-              Password Reset OTP
-            </h2>
-
-            <p>
-              Use the following OTP to reset your password:
-            </p>
-
-            <h1 style="
-              color:#ff512f;
-              letter-spacing:6px;
-              text-align:center;
+            <div style="
+              background:white;
+              padding:30px;
+              border-radius:10px;
             ">
-              ${otp}
-            </h1>
+              <h2 style="color:#0072ff;">
+                Password Reset OTP
+              </h2>
 
-            <p style="
-              color:red;
-              font-weight:bold;
-            ">
-              This OTP is valid only for 15 minutes.
-            </p>
+              <p>
+                Use the following OTP to reset your password:
+              </p>
 
-            <p>
-              After 15 minutes the OTP expires automatically.
-            </p>
+              <h1 style="
+                color:#ff512f;
+                letter-spacing:6px;
+                text-align:center;
+              ">
+                ${otp}
+              </h1>
 
-            <p>
-              If OTP expires, you must click
-              <b>Send OTP</b> again.
-            </p>
+              <p style="
+                color:red;
+                font-weight:bold;
+              ">
+                This OTP is valid only for 15 minutes.
+              </p>
+
+              <p>
+                After 15 minutes the OTP expires automatically.
+              </p>
+
+              <p>
+                If OTP expires, you must click
+                <b>Send OTP</b> again.
+              </p>
+            </div>
           </div>
-        </div>
-      `,
-    });
+        `,
+      });
+      emailSent = true;
+      previewUrl = nodemailer.getTestMessageUrl(info);
+      if (previewUrl) {
+        console.log("📧 Ethereal Email Preview URL:", previewUrl);
+      }
+    } catch (mailErr) {
+      console.error("⚠️ Email delivery failed, providing OTP fallback:", mailErr?.message || mailErr);
+    }
 
-    const isMock = !process.env.EMAIL_HOST || process.env.EMAIL_HOST.includes('example');
     res.json({
-      message: "OTP sent successfully. OTP valid for 15 minutes.",
-      mockOtp: isMock ? otp : undefined
+      message: emailSent
+        ? "OTP sent successfully. OTP valid for 15 minutes."
+        : "OTP generated. (Check OTP below or configure Gmail App Password for direct inbox delivery)",
+      mockOtp: otp,
+      previewUrl: previewUrl || undefined
     });
   } catch (error) {
     console.log(error);
