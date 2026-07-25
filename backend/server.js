@@ -3566,9 +3566,9 @@ app.get('/api/chat/conversation/:userId', authMiddleware, async (req, res) => {
   }
 });
 
-// SPA Fallback Route for React App
-app.get('(.*)', (req, res, next) => {
-  if (req.path.startsWith('/api')) return next();
+// SPA Fallback Middleware for React App
+app.use((req, res, next) => {
+  if (req.method !== 'GET' || req.path.startsWith('/api')) return next();
   const reactDistPath = path.resolve(__dirname, '../frontend-react/dist');
   if (fs.existsSync(path.join(reactDistPath, 'index.html'))) {
     return res.sendFile(path.join(reactDistPath, 'index.html'));
