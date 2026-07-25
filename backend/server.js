@@ -218,7 +218,6 @@ const rateLimitMiddleware = async (req, res, next) => {
   next();
 };
 
-const path = require('path');
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server, path: '/chat' });
