@@ -112,6 +112,8 @@ if (process.env.REDIS_URL) {
   console.log("ℹ️ REDIS_URL not set – using in-memory cache");
 }
 
+const isRedisReady = () => isRedisConnected && redisClient && typeof redisClient.isOpen !== 'undefined' ? redisClient.isOpen : false;
+
 // Memory fallback stores
 const memoryCache = new Map();
 const memoryRateLimit = new Map();
