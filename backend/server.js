@@ -857,8 +857,7 @@ if (!process.env.EMAIL_HOST || process.env.EMAIL_HOST.includes('example')) {
       return Promise.resolve();
     },
   };
-} else {
-  const emailPort = parseInt(process.env.EMAIL_PORT, 10) || 587;
+  const emailPort = parseInt(process.env.EMAIL_PORT, 10) || 465;
   transporter = nodemailer.createTransport({
     host: process.env.EMAIL_HOST,
     port: emailPort,
@@ -869,7 +868,10 @@ if (!process.env.EMAIL_HOST || process.env.EMAIL_HOST.includes('example')) {
     },
     tls: {
       rejectUnauthorized: false
-    }
+    },
+    connectionTimeout: 10000,
+    greetingTimeout: 5000,
+    socketTimeout: 15000
   });
 }
 const sendDecisionEmail = async (user, accepted) => {
