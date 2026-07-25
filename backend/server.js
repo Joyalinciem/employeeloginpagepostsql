@@ -681,6 +681,25 @@ const ensureTables = async () => {
     )
   `);
 
+  const userMigrations = [
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS otp TEXT",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_expiry BIGINT",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN DEFAULT false",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_method TEXT DEFAULT 'none'",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_secret TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS old_password TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_picture TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS can_update_tasks BOOLEAN DEFAULT true",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS can_delete_tasks BOOLEAN DEFAULT false",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS can_update_users BOOLEAN DEFAULT false",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS can_delete_users BOOLEAN DEFAULT false",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS manager_id TEXT",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS cto_id TEXT"
+  ];
+  for (const migration of userMigrations) {
+    try { await runQuery(migration); } catch (err) {}
+  }
+
   await runQuery(`
     CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY,
