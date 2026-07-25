@@ -98,40 +98,19 @@ const redis = require("redis");
 let redisClient = null;
 let isRedisConnected = false;
 
-const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
-redisClient = redis.createClient({ url: redisUrl });
-
-// Optional connection: try to connect, but continue with in‑memory cache on failure
-(async () => {
-  try {
-    await redisClient.connect();
+if (process.env.REDIS_URL) {
+  redisClient = redis.createClient({ url: process.env.REDIS_URL });
+  redisClient.connect().then(() => {
     console.log("✅ Redis Client Connected");
     isRedisConnected = true;
-  } catch (err) {
-    console.warn("⚠️ Redis connection failed – falling back to in‑memory cache:", err?.message || err);
+  }).catch((err) => {
+    console.warn("⚠️ Redis connection failed:", err?.message || err);
     isRedisConnected = false;
-  }
-})();
-
-// Event listeners remain for when connection succeeds later
-redisClient.on("error", (err) => {
-  console.warn("⚠️ Redis Client Error:", err?.message || err);
-  isRedisConnected = false;
-});
-
-redisClient.on("end", () => {
-  console.warn("⚠️ Redis Client disconnected");
-  isRedisConnected = false;
-});
-
-function isRedisReady() {
-  // Returns true if Redis client is connected and ready for commands
-  return isRedisConnected && redisClient && typeof redisClient.isOpen !== 'undefined' ? redisClient.isOpen : false;
+  });
+  redisClient.on("error", () => { isRedisConnected = false; });
+} else {
+  console.log("ℹ️ REDIS_URL not set – using in-memory cache");
 }
-
-redisClient.on("reconnecting", () => {
-  console.log("🔄 Redis reconnecting...");
-});
 
 // Memory fallback stores
 const memoryCache = new Map();
@@ -302,7 +281,11 @@ const normalizeInput = (data) => {
   for (const [key, value] of Object.entries(data || {})) {
     if (value === undefined) continue;
     const dbKey = snakeCase(key === '_id' ? 'id' : key);
-    result[dbKey] = value;
+    let val = value;
+    if ((dbKey === 'manager_id' || dbKey === 'cto_id' || dbKey === 'user_id') && val === '') {
+      val = null;
+    }
+    result[dbKey] = val;
   }
   return result;
 };
